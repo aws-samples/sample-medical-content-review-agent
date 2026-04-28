@@ -14,7 +14,7 @@ Usage:
     python scripts/test-agent-docker.py              # Build & run
     python scripts/test-agent-docker.py --build-only # Build only
     python scripts/test-agent-docker.py --skip-build # Run existing image
-    python scripts/test-agent-docker.py --pattern strands-deep-research
+    python scripts/test-agent-docker.py --pattern medical-content-review
 """
 
 import argparse
@@ -52,7 +52,7 @@ def build_docker_image(pattern: str) -> bool:
     Build Docker image for the specified pattern.
 
     Args:
-        pattern: Agent pattern name (e.g., 'strands-deep-research')
+        pattern: Agent pattern name (e.g., 'medical-content-review')
 
     Returns:
         bool: True if build succeeded, False otherwise
@@ -299,7 +299,7 @@ Examples:
   python scripts/test-agent-docker.py                    # Build and run
   python scripts/test-agent-docker.py --build-only       # Build only
   python scripts/test-agent-docker.py --skip-build       # Use existing image
-  python scripts/test-agent-docker.py --pattern strands-deep-research
+  python scripts/test-agent-docker.py --pattern medical-content-review
         """,
     )
 
@@ -326,7 +326,7 @@ def main() -> None:
 
     # Get configuration from stack
     stack_cfg = get_stack_config()
-    pattern = args.pattern or stack_cfg.get("pattern", "strands-deep-research")
+    pattern = args.pattern or stack_cfg.get("pattern", "medical-content-review")
 
     print(f"Pattern: {pattern}\n")
 

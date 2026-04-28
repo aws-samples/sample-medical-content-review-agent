@@ -17,7 +17,7 @@ export class AmplifyHostingStack extends cdk.NestedStack {
   public readonly stagingBucket: s3.Bucket
 
   constructor(scope: Construct, id: string, props: AmplifyStackProps) {
-    const description = "AgentCore Deep Research - Amplify Hosting Stack"
+    const description = "Medical Content Review - Amplify Hosting Stack"
     super(scope, id, { ...props, description })
 
     // Create access logs bucket for staging bucket
@@ -51,10 +51,10 @@ export class AmplifyHostingStack extends cdk.NestedStack {
           expiration: cdk.Duration.days(30), // Clean up old deployment artifacts after 30 days
         },
       ],
-      // CORS configuration for frontend to fetch research reports
+      // CORS configuration for frontend to fetch reports and upload files
       cors: [
         {
-          allowedMethods: [s3.HttpMethods.GET],
+          allowedMethods: [s3.HttpMethods.GET, s3.HttpMethods.PUT],
           allowedOrigins: ["*"],
           allowedHeaders: ["*"],
         },

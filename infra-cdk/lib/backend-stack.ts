@@ -43,6 +43,7 @@ export class BackendStack extends cdk.NestedStack {
   private machineClient: cognito.UserPoolClient
   private agentRuntime: agentcore.Runtime
   private stagingBucketName: string
+  private stagingBucket: s3.Bucket
 
   constructor(scope: Construct, id: string, props: BackendStackProps) {
     super(scope, id, props)
@@ -52,6 +53,7 @@ export class BackendStack extends cdk.NestedStack {
     this.userPoolClientId = props.userPoolClientId
     this.userPoolDomain = props.userPoolDomain
     this.stagingBucketName = props.stagingBucket.bucketName
+    this.stagingBucket = props.stagingBucket
 
     // Import the Cognito resources from the other stack
     this.userPool = cognito.UserPool.fromUserPoolId(
@@ -100,7 +102,7 @@ export class BackendStack extends cdk.NestedStack {
   }
 
   private createAgentCoreRuntime(config: AppConfig): void {
-    const pattern = config.backend?.pattern || "strands-deep-research"
+    const pattern = config.backend?.pattern || "medical-content-review"
 
     // Parameters
     this.agentName = new cdk.CfnParameter(this, "AgentName", {
@@ -567,6 +569,41 @@ export class BackendStack extends cdk.NestedStack {
       authorizer,
       authorizationType: apigateway.AuthorizationType.COGNITO,
       requestValidator: requestValidator,
+    })
+
+    // Create upload Lambda for pre-signed S3 URLs
+    const uploadLambda = new PythonFunction(this, "UploadLambda", {
+      functionName: `${config.stack_name_base}-upload`,
+      runtime: lambda.Runtime.PYTHON_3_13,
+      entry: path.join(__dirname, "..", "lambdas", "upload"),
+      handler: "handler",
+      environment: {
+        BUCKET_NAME: this.stagingBucketName,
+        CORS_ALLOWED_ORIGINS: `${frontendUrl},http://localhost:3000`,
+      },
+      timeout: cdk.Duration.seconds(10),
+      layers: [
+        lambda.LayerVersion.fromLayerVersionArn(
+          this,
+          "PowertoolsLayerUpload",
+          `arn:aws:lambda:${cdk.Stack.of(this).region}:017000801446:layer:AWSLambdaPowertoolsPythonV3-python313-arm64:18`
+        ),
+      ],
+      logGroup: new logs.LogGroup(this, "UploadLambdaLogGroup", {
+        logGroupName: `/aws/lambda/${config.stack_name_base}-upload`,
+        retention: logs.RetentionDays.ONE_WEEK,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
+    })
+
+    // Grant upload Lambda permission to put objects in staging bucket
+    this.stagingBucket.grantPut(uploadLambda)
+
+    // Create /upload resource and POST method
+    const uploadResource = api.root.addResource("upload")
+    uploadResource.addMethod("POST", new apigateway.LambdaIntegration(uploadLambda), {
+      authorizer,
+      authorizationType: apigateway.AuthorizationType.COGNITO,
     })
 
     // Store the API URL for access from main stack

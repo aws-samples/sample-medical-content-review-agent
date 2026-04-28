@@ -1,8 +1,8 @@
-# Deep research agent dependencies with pinned versions
+# Medical content review agent dependencies
 strands-agents==1.30.0
 strands-agents-tools==0.2.22
 mcp==1.26.0
 bedrock-agentcore[strands-agents]==1.4.6
 PyJWT[crypto]>=2.10.1
-weasyprint>=62.0
-markdown>=3.7
+pdf2image>=1.17.0
+defusedxml>=0.7.1

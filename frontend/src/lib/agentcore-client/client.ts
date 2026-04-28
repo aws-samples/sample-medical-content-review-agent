@@ -11,7 +11,7 @@ import { parseStrandsChunk } from "./parsers/strands";
 import { readSSEStream } from "./utils/sse";
 
 const PARSERS: Record<AgentPattern, ChunkParser> = {
-  "strands-deep-research": parseStrandsChunk,
+  "medical-content-review": parseStrandsChunk,
 };
 
 export class AgentCoreClient {
@@ -39,7 +39,9 @@ export class AgentCoreClient {
     accessToken: string,
     onEvent: StreamCallback,
     enabledSources?: string[],
-    s3FileUris?: string[],
+    contentPdfUri?: string,
+    referenceUris?: string[],
+    claimsUris?: string[],
   ): Promise<void> {
     if (!accessToken) throw new Error("No valid access token found.");
     if (!this.runtimeArn) throw new Error("Agent Runtime ARN not configured.");
@@ -66,8 +68,16 @@ export class AgentCoreClient {
       payload.enabledSources = enabledSources;
     }
 
-    if (s3FileUris && s3FileUris.length > 0) {
-      payload.s3FileUris = s3FileUris;
+    if (contentPdfUri) {
+      payload.contentPdfUri = contentPdfUri;
+    }
+
+    if (referenceUris && referenceUris.length > 0) {
+      payload.referenceUris = referenceUris;
+    }
+
+    if (claimsUris && claimsUris.length > 0) {
+      payload.claimsUris = claimsUris;
     }
 
     // User identity is extracted server-side from the validated JWT token

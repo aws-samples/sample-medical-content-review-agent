@@ -1,6 +1,6 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-stack_name_base: deep-research
+stack_name_base: medical-content-review
 region: null # AWS region to deploy the stack (e.g., us-west-2). If null, uses your AWS CLI default region.
 
 # Optional: Set to automatically create an admin user and email credentials
@@ -10,53 +10,50 @@ admin_user_email: null
 auto_deploy_frontend: true # Automatically deploy frontend after CDK deploy (when using npm run deploy)
 
 backend:
-  pattern: strands-deep-research
+  pattern: medical-content-review
   deployment_type: docker # Available deployment types: docker (default), zip
   model_id: global.anthropic.claude-sonnet-4-6 # Model ID for the agent (with cross-region prefix)
 
-# Research tools configuration
+# Tools configuration
 # enabled: whether the tool is deployed and available (true/false)
 # default_on: whether the tool is toggled on by default in the UI (true/false)
 # required: fields that must be non-null for the tool to work
 tools:
-  alphavantage: # Commodity prices, economic indicators, and market news
-    enabled: false
-    default_on: false
-    required:
-      api_key: null # Get your key from https://www.alphavantage.co/
-  arxiv: # Search academic papers on arXiv by topic, author, or keywords
-    enabled: true
-    default_on: true
-  bedrock_kb: # Query Amazon Bedrock Knowledge Bases for enterprise data
-    enabled: false
-    default_on: false
-    required:
-      knowledge_base_id: null # Replace with your Bedrock Knowledge Base ID
-  clinicaltrials: # Search clinical studies by condition, intervention, or phase
-    enabled: true
-    default_on: true
-  edgar: # Search SEC company filings (10-K, 10-Q, 8-K)
-    enabled: true
-    default_on: true
-  fred: # 800K+ economic time series from the Federal Reserve
-    enabled: false
-    default_on: false
-    required:
-      api_key: null # Get your key from https://fredaccount.stlouisfed.org
-  nova: # AWS-powered web search via Amazon Nova with citations
+  # Reference verification tools
+  pubmed: # Search peer-reviewed biomedical and life sciences literature
     enabled: true
     default_on: true
   openfda: # Search FDA drug label database for pharmaceutical information
     enabled: true
     default_on: true
-  pubmed: # Search peer-reviewed biomedical and life sciences literature
+  clinicaltrials: # Search clinical studies by condition, intervention, or phase
     enabled: true
     default_on: true
-  s3: # Read text files and PDFs from S3 buckets
+  s3: # Read text files and PDFs from S3 buckets (for reference materials)
+    enabled: true
+    default_on: true
+  bedrock_kb: # Query Amazon Bedrock Knowledge Bases (for approved claims DB)
+    enabled: false
+    default_on: false
+    required:
+      knowledge_base_id: null # Replace with your Bedrock Knowledge Base ID
+  nova: # AWS-powered web search via Amazon Nova with citations
     enabled: true
     default_on: false
-  tavily: # Search the web with relevance scoring and domain filtering
+
+  # Disabled by default (not needed for medical review)
+  arxiv:
     enabled: false
-    default_on: true
-    required:
-      api_key: null # Get your key from https://tavily.com/
+    default_on: false
+  alphavantage:
+    enabled: false
+    default_on: false
+  edgar:
+    enabled: false
+    default_on: false
+  fred:
+    enabled: false
+    default_on: false
+  tavily:
+    enabled: false
+    default_on: false

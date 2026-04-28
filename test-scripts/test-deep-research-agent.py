@@ -2,18 +2,18 @@
 
 
 """
-Test the Deep Research Agent via AgentCore Runtime.
+Test the Medical Content Review Agent via AgentCore Runtime.
 
 This script tests the full research workflow by sending a research query
 and streaming the response, including tool calls for file operations
 and data retrieval.
 
 Usage:
-    uv run test-scripts/test-deep-research-agent.py [query]
+    uv run test-scripts/test-medical-content-review-agent.py [query]
 
 Examples:
-    uv run test-scripts/test-deep-research-agent.py
-    uv run test-scripts/test-deep-research-agent.py "What are the latest advances in AI agents?"
+    uv run test-scripts/test-medical-content-review-agent.py
+    uv run test-scripts/test-medical-content-review-agent.py "What are the latest advances in AI agents?"
 """
 
 import json
@@ -119,7 +119,7 @@ def invoke_agent_streaming(
 
 def main():
     """Main entry point."""
-    print_section("Deep Research Agent Test")
+    print_section("Medical Content Review Agent Test")
 
     # Get research query from args or use default
     if len(sys.argv) > 1:
@@ -174,7 +174,7 @@ def main():
         sys.exit(1)
 
     # Create client and invoke agent
-    print_section("Invoking Deep Research Agent")
+    print_section("Invoking Medical Content Review Agent")
     client = get_runtime_client(region)
 
     import uuid

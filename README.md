@@ -1,21 +1,21 @@
-# AgentCore Deep Research
+# Medical Content Review
 
-AgentCore Deep Research is a sample AI solution for deep research built on Amazon Bedrock AgentCore. It conducts thorough research across multiple data sources and creates comprehensive reports with proper citations. The app features a modern React frontend showing real-time report generation alongside the chat. This sample is built using the [Fullstack Solution Template for AgentCore](https://github.com/awslabs/fullstack-solution-template-for-agentcore).
+Medical Content Review is an AI-powered multi-agent system for reviewing medical and pharmaceutical content for adherence issues. Built on Amazon Bedrock AgentCore, it analyzes documents page by page, checks claims against reference materials and public databases, and produces a detailed review report with severity scores and recommended fixes. This sample is built using the [Fullstack Solution Template for AgentCore](https://github.com/awslabs/fullstack-solution-template-for-agentcore).
 
-![Workflow](docs/figures/workflow.png)
+![UI](docs/figures/Picture1.png)
 
 **✨ Key features:**
-- **Multi-source analysis**: Search across enterprise data, Internet, and specialized APIs (10+ built-in sources)
-- **Iterative workflow**: AI agent scaffolds report, researches the data, and creates a detailed report
-- **Data visualization**: Agent generates charts and diagrams to enrich reports with quantitative insights
-- **Real-time report display**: Split-pane UI shows the report being built in real-time and allows follow-ups
-- **Fact-checking and citations**: Every factual claim includes inline source citations with the references section
+- **Drag-and-drop upload**: Upload medical content PDFs and reference materials directly from the browser
+- **Multi-agent review pipeline**: AI agents process PDFs, extract claims, and verify them against references
+- **Reference verification**: Cross-check claims against PubMed, OpenFDA, ClinicalTrials.gov, and uploaded reference documents
+- **Real-time results**: Split-pane UI shows review issues as they are found, with severity scoring
+- **Detailed issue reports**: Each issue includes the quoted text, severity score, recommended fix, and source reference
 
 ## 🚀 Deployment
 
 **Prerequisites**: [Node.js 20+](https://nodejs.org/), [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html), [AWS CDK CLI](https://docs.aws.amazon.com/cdk/v2/guide/getting-started.html), [Python 3.10+](https://www.python.org/downloads/), [uv](https://docs.astral.sh/uv/), and [Docker](https://docs.docker.com/engine/install/). See the [deployment guide](docs/DEPLOYMENT.md) for details.
 
-Deploying AgentCore Deep Research stack requires a few commands:
+Deploying the Medical Content Review stack requires a few commands:
 
 ```bash
 cd infra-cdk
@@ -37,52 +37,27 @@ See the [deployment guide](docs/DEPLOYMENT.md) for detailed instructions.
 
 ## ▶️ Usage
 
-![UI Screenshot](docs/figures/ui-screenshot.jpg)
-
 1. Open the application URL (from CDK outputs)
 2. Log in with Cognito credentials
-3. Toggle data sources (AlphaVantage, Tavily, Nova, ArXiv, etc.) as needed
-4. Enter a research question
-5. Watch as the agent:
-   - Scaffolds report structure with key themes
-   - Researches across enabled data sources
-   - Writes all sections with citations
-   - Verifies completeness and fills gaps
-   - Generates charts and diagrams when the report has quantitative data
-6. Ask follow-up questions and download the report (including any generated charts)
+3. Upload a medical content PDF (drag-and-drop or click to select)
+4. Optionally upload reference materials
+5. Click **Start AI Review** and watch as the agent:
+   - Processes the PDF and splits content into batches
+   - Extracts medical claims and statements
+   - Verifies claims against reference materials and public databases
+   - Generates a detailed review report with severity scores
+6. Review detected issues in the results panel, download the report as JSON
 
 
 ## ℹ️ Architecture
 
-![Architecture Diagram](docs/figures/adr-architecture.png)
+![Architecture Diagram](docs/figures/agentic-mlr-architecture.png)
 
 The architecture uses Amazon Cognito in four places:
-1. User-based login to the frontend web application on CloudFront
+1. User-based login to the frontend web application
 2. Token-based authentication for the frontend to access AgentCore Runtime
 3. Token-based authentication for the agents in AgentCore Runtime to access AgentCore Gateway
-4. Token-based authentication when making API requests to API Gateway.
-
-### Gateway Tools
-
-The application includes multiple Lambda-based tools behind AgentCore Gateway with OAuth authentication:
-
-| Tool | Domain | Description | API Key Required |
-|------|--------|-------------|:---:|
-| AlphaVantage Research | Finance | Commodity prices, US economic indicators, and market news with sentiment analysis | Yes |
-| ArXiv Search | Science | Search academic papers on arXiv by topic, author, or keywords with category filtering | No |
-| ClinicalTrials.gov Search | Life Science | Search clinical studies worldwide by condition, intervention, phase, and recruitment status | No |
-| FRED Economic Search | Finance | Search 800,000+ economic time series from the Federal Reserve (GDP, CPI, unemployment, and more) | No |
-| Knowledge Base Search | Generic | Query Amazon Bedrock Knowledge Bases (requires configuration) | No |
-| Nova Web Grounding | Generic | AWS-powered web search via Amazon Nova with citations | No |
-| OpenFDA Drug Search | Life Science | Search FDA drug label database for pharmaceutical information | No |
-| PubMed Search | Life Science | Search peer-reviewed biomedical literature for abstracts, journal articles, and meta-analyses | No |
-| S3 File Reader | Generic | Read text files and PDFs from S3 (PDFs auto-converted to markdown via pymupdf4llm) | No |
-| SEC EDGAR Search | Finance | Search SEC company filings (10-K, 10-Q, 8-K) with optional full-text content retrieval | No |
-| Tavily Web Search | Generic | Search the web for current information with relevance scoring and domain filtering | Yes |
-
-The modular architecture makes it easy to integrate additional data sources for developers.
-
-> **Note:** Several tools connect to external (non-AWS) APIs: Tavily, ArXiv, OpenFDA, AlphaVantage, FRED, PubMed, SEC EDGAR, and ClinicalTrials.gov. Of these, Tavily and AlphaVantage require API keys obtained through external registration. All external APIs, whether free or paid, are subject to the terms and conditions of their respective providers. We are not responsible for the availability, accuracy, or usage policies of third-party APIs. Please review each provider's terms before use. See the [deployment guide](docs/DEPLOYMENT.md) for stack setup instructions and which tools require API keys.
+4. Token-based authentication when making API requests to API Gateway
 
 ### Tech Stack
 
@@ -103,25 +78,13 @@ Local development requires a deployed stack because the agent depends on AWS ser
 You must first deploy the stack with `npm run deploy` (from `infra-cdk/`), then you can run the frontend and agent locally using Docker Compose while connecting to these deployed AWS resources:
 
 ```bash
-# Set required environment variables (see below for how to find these)
 export MEMORY_ID=your-memory-id
 export STACK_NAME=your-stack-name
 export AWS_DEFAULT_REGION=us-east-1
 
-# Start the full stack locally
 cd docker
 docker compose up --build
 ```
-
-**Finding the environment variable values:**
-- `STACK_NAME`: Use the `stack_name_base` value from your `infra-cdk/config.yaml`
-- `MEMORY_ID`: Extract from the `MemoryArn` CloudFormation output (the ID is the last segment after `/`)
-  ```bash
-  aws cloudformation describe-stacks --stack-name <your-stack-name> \
-    --query 'Stacks[0].Outputs[?OutputKey==`MemoryArn`].OutputValue' --output text
-  # Returns: arn:aws:bedrock-agentcore:region:account:memory/MEMORY_ID
-  ```
-- `AWS_DEFAULT_REGION`: The region where you deployed the stack (e.g., `us-east-1`)
 
 See the [local development guide](docs/LOCAL_DEVELOPMENT.md) for detailed setup instructions.
 
@@ -129,48 +92,42 @@ See the [local development guide](docs/LOCAL_DEVELOPMENT.md) for detailed setup 
 ## 📂 Project Structure
 
 ```
-agentcore-deep-research/
+medical-content-review/
 ├── frontend/                 # React frontend application
 │   ├── src/
 │   │   ├── components/     # React components (shadcn/ui)
 │   │   ├── hooks/          # Custom React hooks
 │   │   ├── lib/            # Utility libraries
-│   │   ├── services/       # API service layers
+│   │   ├── services/       # API service layers (upload, feedback)
 │   │   └── types/          # TypeScript type definitions
 │   ├── public/             # Static assets and aws-exports.json
 │   └── package.json
 ├── infra-cdk/               # CDK infrastructure code
 │   ├── lib/                # CDK stack definitions
 │   ├── bin/                # CDK app entry point
-│   ├── lambdas/            # Lambda function code
-│   ├── .config_example.yaml # Example deployment configuration (copy to config.yaml)
+│   ├── lambdas/            # Lambda function code (feedback, upload)
+│   ├── .config_example.yaml # Example deployment configuration
 │   └── config.yaml         # Your deployment configuration (gitignored)
 ├── patterns/               # Agent pattern implementations
-│   └── strands-deep-research/ # Deep Research agent
-│       ├── deep_research_agent.py  # Main agent with Gateway tools
-│       ├── report_upload_hook.py   # S3 upload for real-time display
-│       ├── system_prompt.txt       # 5-step research workflow
-│       ├── requirements.txt        # Agent dependencies
-│       └── Dockerfile              # Container configuration
-├── tools/                  # Agent tool implementations
-│   ├── code_interpreter/   # Code interpreter for chart generation
-│   └── data_analysis/      # Data analysis advisor prompt
+│   └── medical-content-review/ # Medical review agent
+│       ├── medical_review_agent.py # Main agent with Gateway tools
+│       ├── review_upload_hook.py   # S3 upload for real-time display
+│       ├── system_prompt.txt       # Review workflow prompt
+│       ├── tools/                  # PDF processor, claim extractor, etc.
+│       ├── requirements.txt
+│       └── Dockerfile
 ├── gateway/                # Gateway utilities and tools
 │   └── tools/              # Gateway tool implementations
 ├── docker/                 # Local development Docker setup
-│   └── docker-compose.yml  # Docker Compose for local stack
+│   └── docker-compose.yml
 ├── scripts/                # Deployment and test scripts
-│   └── deploy-frontend.py  # Cross-platform frontend deployment
-├── docs/                   # Documentation source files
-├── tests/                  # Test suite
+├── docs/                   # Documentation
 └── README.md
 ```
 
 ## 🔒 Security
 
-Note: this asset represents a proof-of-value for the services included and is not intended as a production-ready solution. You must determine how the AWS Shared Responsibility applies to your specific use case and implement the needed controls to achieve your desired security outcomes. AWS offers a broad set of security tools and configurations to enable our customers.
-
-Ultimately it is your responsibility as the developer to ensure all aspects of the application are secure. We provide security best practices in repository documentation and provide a secure baseline but Amazon holds no responsibility for the security of applications built from this tool.
+Note: this asset represents a proof-of-value for the services included and is not intended as a production-ready solution. You must determine how the AWS Shared Responsibility applies to your specific use case and implement the needed controls to achieve your desired security outcomes.
 
 ## 👤 Team
 

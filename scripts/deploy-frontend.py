@@ -126,7 +126,7 @@ def parse_config_yaml(config_path: Path) -> dict:
     config: dict = {
         "stack_name_base": "",
         "region": None,
-        "pattern": "strands-deep-research",
+        "pattern": "medical-content-review",
         "auto_deploy_frontend": False,
         "tools": {},
     }
@@ -551,7 +551,7 @@ def main() -> int:
     log_success(f"Region: {region}")
 
     # Get agent pattern and tools config
-    pattern = config.get("pattern", "strands-deep-research")
+    pattern = config.get("pattern", "medical-content-review")
     tools = config.get("tools", {})
     log_info(f"Agent pattern: {pattern}")
 
