@@ -48,7 +48,7 @@ def get_stack_config(stack_name: str | None = None) -> dict:
             sys.exit(1)
 
     # Get pattern from config
-    pattern = config.get("backend", {}).get("pattern", "strands-deep-research")
+    pattern = config.get("backend", {}).get("pattern", "medical-content-review")
 
     cfn = boto3.client("cloudformation")
 

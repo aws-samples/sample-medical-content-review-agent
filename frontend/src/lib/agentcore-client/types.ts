@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT-0
 
 /** Supported agent framework patterns */
-export type AgentPattern = "strands-deep-research";
+export type AgentPattern = "medical-content-review";
 
 /** Configuration for AgentCoreClient */
 export interface AgentCoreConfig {

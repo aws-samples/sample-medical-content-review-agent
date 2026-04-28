@@ -36,7 +36,7 @@ python test-scripts/test-agent-docker.py --build-only
 python test-scripts/test-agent-docker.py --skip-build
 
 # Test specific pattern
-python test-scripts/test-agent-docker.py --pattern strands-deep-research
+python test-scripts/test-agent-docker.py --pattern medical-content-review
 ```
 
 ## How It Works
@@ -174,7 +174,7 @@ If you need more control, you can run Docker commands directly:
 
 ```bash
 # Build image manually
-docker build -f patterns/strands-deep-research/Dockerfile \
+docker build -f patterns/medical-content-review/Dockerfile \
   -t adr-agent-local \
   --platform linux/arm64 .
 

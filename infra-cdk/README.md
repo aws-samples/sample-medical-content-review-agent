@@ -64,7 +64,7 @@ region: null  # AWS region (e.g., us-west-2). If null, uses AWS CLI default regi
 admin_user_email: admin@example.com  # Required: Email for the admin user
 
 backend:
-  pattern: "strands-deep-research"
+  pattern: "medical-content-review"
 
 # Research tools: enabled = deployed, default_on = toggled on in UI by default
 tools:
@@ -154,7 +154,7 @@ The agent container builds use a specific configuration to handle the repository
 
 **Solution**: Use repository root as build context with optimized file filtering:
 
-1. **Build Context**: Repository root (`/path/to/agentcore-deep-research/`)
+1. **Build Context**: Repository root (`/path/to/medical-content-review/`)
 2. **Dockerfile Location**: `patterns/{pattern}/Dockerfile`
 3. **Package Installation**: Install package (`gateway/` + `pyproject.toml`) as proper Python package
 4. **File Filtering**: `.dockerignore` excludes large directories to prevent build hangs
@@ -180,7 +180,7 @@ Instead of copying files with relative paths, the Dockerfile:
    - Eliminates need for file copying between directories
    - Works consistently across all agent patterns
 
-2. **Copies only agent code**: `COPY patterns/strands-deep-research/deep_research_agent.py .`
+2. **Copies only agent code**: `COPY patterns/medical-content-review/medical_review_agent.py .`
    - Minimal file copying for the specific agent
    - Clean separation between shared utilities and agent logic
 

@@ -1,6 +1,6 @@
 # Frontend - Local Development Guide
 
-This is the React + Vite frontend. This README focuses on local development setup and workflows.
+This is the React + Vite frontend for Medical Content Review. This README focuses on local development setup and workflows.
 
 For full stack deployment instructions, see the [top-level README](../README.md) and [deployment documentation](../docs/DEPLOYMENT.md).
 

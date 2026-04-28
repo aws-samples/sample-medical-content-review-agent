@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agentcore-deep-research"
+name = "medical-content-review"
 version = "0.1.0"
-description = "AgentCore Deep Research - AI-powered multi-source deep research application"
+description = "Medical Content Review - AI-powered multi-source medical content review"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
@@ -44,7 +44,7 @@ agent-strands = [
 
 # All dependencies for local development
 all = [
-    "agentcore-deep-research[dev,agent-strands]",
+    "medical-content-review[dev,agent-strands]",
 ]
 
 [tool.setuptools.packages.find]

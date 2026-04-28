@@ -93,7 +93,7 @@ export class ConfigManager {
         admin_user_email: parsedConfig.admin_user_email || null,
         auto_deploy_frontend: parsedConfig.auto_deploy_frontend ?? false,
         backend: {
-          pattern: parsedConfig.backend?.pattern || "strands-deep-research",
+          pattern: parsedConfig.backend?.pattern || "medical-content-review",
           deployment_type: deploymentType,
           model_id: parsedConfig.backend?.model_id,
         },

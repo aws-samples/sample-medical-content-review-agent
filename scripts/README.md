@@ -1,6 +1,6 @@
 # Deployment Scripts
 
-This directory contains scripts for deploying AgentCore Deep Research infrastructure and frontend.
+This directory contains scripts for deploying Medical Content Review infrastructure and frontend.
 
 ## Main Deployment Workflow
 
@@ -51,7 +51,7 @@ change anything:
   "agentRuntimeArn": "arn:aws:bedrock-agentcore:region:account:runtime/runtime-id",
   "awsRegion": "us-east-1",
   "feedbackApiUrl": "https://your-api-gateway-url",
-  "agentPattern": "strands-deep-research",
+  "agentPattern": "medical-content-review",
   "tools": {
     "tavily": { "enabled": true, "default_on": true },
     "nova": { "enabled": true, "default_on": true }

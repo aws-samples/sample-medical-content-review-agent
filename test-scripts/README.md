@@ -36,12 +36,12 @@ uv run test-scripts/test-agent.py
 uv run test-scripts/test-agent.py --local
 
 # Override pattern for local testing
-uv run test-scripts/test-agent.py --local --pattern strands-deep-research
+uv run test-scripts/test-agent.py --local --pattern medical-content-review
 ```
 
 **Supported Patterns:**
 
-- `strands-deep-research` - Deep Research agent with multi-source search
+- `medical-content-review` - Medical Content Review agent with multi-source search
 
 **Prerequisites:**
 
@@ -67,7 +67,7 @@ python test-scripts/test-agent-docker.py --build-only
 python test-scripts/test-agent-docker.py --skip-build
 
 # Test specific pattern
-python test-scripts/test-agent-docker.py --pattern strands-deep-research
+python test-scripts/test-agent-docker.py --pattern medical-content-review
 ```
 
 **What it tests:**
@@ -181,26 +181,26 @@ uv run test-scripts/test-arxiv-tool.py
 
 ### test-deep-research-agent.py
 
-Tests the Deep Research Agent via AgentCore Runtime with streaming.
+Tests the Medical Content Review Agent via AgentCore Runtime with streaming.
 
 **Usage:**
 
 ```bash
-# Default research query
+# Default query
 uv run test-scripts/test-deep-research-agent.py
 
 # Custom query
-uv run test-scripts/test-deep-research-agent.py "What are the latest advances in AI agents?"
+uv run test-scripts/test-deep-research-agent.py "Review this medical content for adherence"
 ```
 
 **Prerequisites:**
 
-- Deployed stack with `strands-deep-research` pattern
+- Deployed stack with `medical-content-review` pattern
 - `ACCESS_TOKEN` environment variable set with valid Cognito token
 
 **What it does:**
 
-1. Sends research query to the Deep Research Agent
+1. Sends research query to the Medical Content Review Agent
 2. Streams the response including tool calls
 3. Shows file operations and data retrieval in real-time
 

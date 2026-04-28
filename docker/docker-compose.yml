@@ -6,7 +6,7 @@ services:
   agent:
     build:
       context: ..
-      dockerfile: patterns/strands-deep-research/Dockerfile
+      dockerfile: patterns/medical-content-review/Dockerfile
       platforms:
         - linux/arm64
     ports:

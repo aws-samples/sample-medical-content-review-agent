@@ -158,8 +158,12 @@ interface DataSourceBarProps {
   enabledSources: Record<string, boolean>;
   onToggle: (id: string) => void;
   onReset: () => void;
-  s3FileInput?: string;
-  onS3FileInputChange?: (value: string) => void;
+  contentPdfInput?: string;
+  onContentPdfInputChange?: (value: string) => void;
+  referenceInput?: string;
+  onReferenceInputChange?: (value: string) => void;
+  claimsInput?: string;
+  onClaimsInputChange?: (value: string) => void;
 }
 
 export function DataSourceBar({
@@ -167,8 +171,12 @@ export function DataSourceBar({
   enabledSources,
   onToggle,
   onReset,
-  s3FileInput,
-  onS3FileInputChange,
+  contentPdfInput,
+  onContentPdfInputChange,
+  referenceInput,
+  onReferenceInputChange,
+  claimsInput,
+  onClaimsInputChange,
 }: DataSourceBarProps) {
   const [expanded, setExpanded] = useState(false);
 
@@ -309,18 +317,53 @@ export function DataSourceBar({
             </p>
           </div>
 
-          {/* S3 file URIs input */}
-          {enabledSources["s3"] && onS3FileInputChange && (
-            <div className="mt-3 pt-3 border-t border-border">
-              <textarea
-                placeholder="s3://bucket/path/to/file.txt&#10;s3://bucket/another/file.csv"
-                value={s3FileInput}
-                onChange={(e) => onS3FileInputChange(e.target.value)}
-                rows={2}
-                className="w-full px-3 py-2 border border-border rounded-lg text-xs font-mono text-left placeholder:text-muted-foreground bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-blue-300 dark:focus:ring-blue-600"
-              />
-              <p className="text-[10px] text-muted-foreground mt-1">
-                One S3 URI per line (supports txt, md, csv, json, pdf, etc.)
+          {/* S3 file inputs */}
+          {enabledSources["s3"] && (
+            <div className="mt-3 pt-3 border-t border-border space-y-3">
+              {onContentPdfInputChange && (
+                <div>
+                  <label className="text-[11px] font-semibold text-foreground block mb-1">
+                    📄 Content to review
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="s3://bucket/path/to/content.pdf"
+                    value={contentPdfInput}
+                    onChange={(e) => onContentPdfInputChange(e.target.value)}
+                    className="w-full px-3 py-1.5 border border-border rounded-lg text-xs font-mono placeholder:text-muted-foreground bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-blue-300 dark:focus:ring-blue-600"
+                  />
+                </div>
+              )}
+              {onReferenceInputChange && (
+                <div>
+                  <label className="text-[11px] font-semibold text-foreground block mb-1">
+                    📚 Reference materials
+                  </label>
+                  <textarea
+                    placeholder="s3://bucket/path/to/reference1.pdf&#10;s3://bucket/path/to/reference2.pdf"
+                    value={referenceInput}
+                    onChange={(e) => onReferenceInputChange(e.target.value)}
+                    rows={2}
+                    className="w-full px-3 py-1.5 border border-border rounded-lg text-xs font-mono placeholder:text-muted-foreground bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-blue-300 dark:focus:ring-blue-600"
+                  />
+                </div>
+              )}
+              {onClaimsInputChange && (
+                <div>
+                  <label className="text-[11px] font-semibold text-foreground block mb-1">
+                    ✅ Approved claims
+                  </label>
+                  <textarea
+                    placeholder="s3://bucket/path/to/approved-claims.pdf&#10;s3://bucket/path/to/claims2.csv"
+                    value={claimsInput}
+                    onChange={(e) => onClaimsInputChange(e.target.value)}
+                    rows={2}
+                    className="w-full px-3 py-1.5 border border-border rounded-lg text-xs font-mono placeholder:text-muted-foreground bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-blue-300 dark:focus:ring-blue-600"
+                  />
+                </div>
+              )}
+              <p className="text-[10px] text-muted-foreground">
+                One S3 URI per line. Supports txt, md, csv, json, pdf, etc.
               </p>
             </div>
           )}
