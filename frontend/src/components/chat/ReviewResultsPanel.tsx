@@ -25,6 +25,12 @@ export interface ActivityEntry {
   output?: string;
 }
 
+export interface PreviewDoc {
+  name: string;
+  url: string;
+  kind: "content" | "reference";
+}
+
 interface ReviewResultsPanelProps {
   issues: ReviewIssue[];
   isLoading: boolean;
@@ -33,6 +39,7 @@ interface ReviewResultsPanelProps {
   phaseDone?: number[];
   startedAt?: number | null;
   documentUrl?: string | null;
+  previewDocs?: PreviewDoc[];
   onNewReview: () => void;
 }
 
@@ -64,6 +71,68 @@ function ElapsedTimer({ startedAt }: { startedAt: number }) {
   );
 }
 
+function DocumentPreviewHeader({
+  tabs,
+  activeIdx,
+  onSelect,
+}: {
+  tabs: PreviewDoc[];
+  activeIdx: number;
+  onSelect: (idx: number) => void;
+}) {
+  // No tabs — plain header
+  if (tabs.length === 0) {
+    return (
+      <div className="bg-gradient-to-r from-purple-50 to-pink-50 px-6 py-4 border-b border-gray-200 shrink-0">
+        <h3 className="text-lg font-semibold text-gray-900">
+          Document Preview
+        </h3>
+      </div>
+    );
+  }
+  // Single doc — show the file name, no tab bar
+  if (tabs.length === 1) {
+    return (
+      <div className="bg-gradient-to-r from-purple-50 to-pink-50 px-6 py-3 border-b border-gray-200 shrink-0">
+        <h3 className="text-base font-semibold text-gray-900 truncate">
+          {tabs[0].name}
+        </h3>
+        <p className="text-[11px] text-gray-500 uppercase tracking-wide">
+          {tabs[0].kind === "content" ? "Medical content" : "Reference"}
+        </p>
+      </div>
+    );
+  }
+  // Multiple docs — tab strip
+  return (
+    <div className="bg-gradient-to-r from-purple-50 to-pink-50 border-b border-gray-200 shrink-0">
+      <div className="flex items-end gap-1 px-3 pt-3 overflow-x-auto">
+        {tabs.map((tab, idx) => {
+          const isActive = idx === activeIdx;
+          return (
+            <button
+              key={idx}
+              type="button"
+              onClick={() => onSelect(idx)}
+              className={`group max-w-[18rem] shrink-0 px-3 py-2 rounded-t-lg text-xs font-medium flex items-center gap-1.5 border-t border-x transition-colors ${
+                isActive
+                  ? "bg-white text-gray-900 border-gray-200 shadow-sm"
+                  : "bg-transparent text-gray-600 hover:text-gray-900 hover:bg-white/60 border-transparent"
+              }`}
+              title={tab.name}
+            >
+              <span className="text-sm leading-none">
+                {tab.kind === "content" ? "📄" : "📎"}
+              </span>
+              <span className="truncate">{tab.name}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function getSeverityColor(score: number) {
   if (score >= 90) return "bg-red-50 border-l-red-600";
   if (score >= 70) return "bg-orange-50 border-l-orange-600";
@@ -86,11 +155,26 @@ export function ReviewResultsPanel({
   phaseDone = [0, 0, 0, 0, 0],
   startedAt = null,
   documentUrl,
+  previewDocs,
   onNewReview,
 }: ReviewResultsPanelProps) {
   const [selectedIssue, setSelectedIssue] = useState<ReviewIssue | null>(null);
   const [currentPage, setCurrentPage] = useState<number>(1);
+  const [activePreviewIdx, setActivePreviewIdx] = useState<number>(0);
   const activityScrollRef = useRef<HTMLDivElement | null>(null);
+
+  // Effective preview tab list: prefer previewDocs, fall back to legacy documentUrl
+  const previewTabs: PreviewDoc[] = useMemo(() => {
+    if (previewDocs && previewDocs.length > 0) return previewDocs;
+    if (documentUrl)
+      return [
+        { name: "Medical content", url: documentUrl, kind: "content" as const },
+      ];
+    return [];
+  }, [previewDocs, documentUrl]);
+
+  const activeDocUrl = previewTabs[activePreviewIdx]?.url ?? null;
+  const isContentActive = previewTabs[activePreviewIdx]?.kind === "content";
 
   useEffect(() => {
     const el = activityScrollRef.current;
@@ -131,17 +215,17 @@ export function ReviewResultsPanel({
       <div className="h-full overflow-auto bg-gradient-to-br from-slate-800 via-slate-700 to-slate-900">
         <div className="container mx-auto px-6 py-8 max-w-7xl">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:h-[800px]">
-            {/* Left: Document Preview */}
+            {/* Left: Document Preview (with tabs for content + references) */}
             <div className="bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden flex flex-col h-[800px] lg:h-full">
-              <div className="bg-gradient-to-r from-purple-50 to-pink-50 px-6 py-4 border-b border-gray-200 shrink-0">
-                <h3 className="text-lg font-semibold text-gray-900">
-                  Document Preview
-                </h3>
-              </div>
+              <DocumentPreviewHeader
+                tabs={previewTabs}
+                activeIdx={activePreviewIdx}
+                onSelect={setActivePreviewIdx}
+              />
               <div className="flex-1 overflow-hidden">
-                {documentUrl ? (
+                {activeDocUrl ? (
                   <iframe
-                    src={documentUrl}
+                    src={activeDocUrl}
                     className="w-full h-full"
                     title="PDF Document"
                   />
@@ -502,17 +586,21 @@ export function ReviewResultsPanel({
 
         {/* Split-Pane: PDF left, Issues right */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Left: Document Preview */}
+          {/* Left: Document Preview (with tabs for content + references) */}
           <div className="bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden">
-            <div className="bg-gradient-to-r from-purple-50 to-pink-50 px-6 py-4 border-b border-gray-200">
-              <h3 className="text-lg font-semibold text-gray-900">
-                Document Preview
-              </h3>
-            </div>
+            <DocumentPreviewHeader
+              tabs={previewTabs}
+              activeIdx={activePreviewIdx}
+              onSelect={setActivePreviewIdx}
+            />
             <div className="h-[800px] overflow-hidden">
-              {documentUrl ? (
+              {activeDocUrl ? (
                 <iframe
-                  src={`${documentUrl}#page=${currentPage}`}
+                  src={
+                    isContentActive
+                      ? `${activeDocUrl}#page=${currentPage}`
+                      : activeDocUrl
+                  }
                   className="w-full h-full"
                   title="PDF Document"
                 />
@@ -541,6 +629,10 @@ export function ReviewResultsPanel({
                     )} cursor-pointer hover:shadow-lg transition-all`}
                     onClick={() => {
                       setCurrentPage(issue.page);
+                      const contentIdx = previewTabs.findIndex(
+                        (t) => t.kind === "content",
+                      );
+                      if (contentIdx >= 0) setActivePreviewIdx(contentIdx);
                       setSelectedIssue(issue);
                     }}
                   >

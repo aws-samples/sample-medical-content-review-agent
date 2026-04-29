@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT-0
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChatHeader } from "./ChatHeader";
 import { Message, MessageSegment, ToolCall } from "./types";
 import {
@@ -40,7 +40,7 @@ const TOOL_META: Record<string, { label: string; icon: string }> = {
   batch_content: { label: "Splitting into batches", icon: "✂️" },
   extract_claims: { label: "Extracting claims", icon: "📝" },
   file_read: { label: "Reading file", icon: "📂" },
-  file_write: { label: "Writing report", icon: "✅" },
+  file_write: { label: "Writing a review report", icon: "✅" },
   pubmed_search: { label: "Searching PubMed", icon: "🔬" },
   openfda_drug_search: { label: "Searching OpenFDA", icon: "💊" },
   clinicaltrials_search: { label: "Searching ClinicalTrials.gov", icon: "🏥" },
@@ -223,6 +223,7 @@ export default function ChatInterface() {
   const [documentUrl, setDocumentUrl] = useState<string | null>(null);
   const [referenceFiles, setReferenceFiles] = useState<File[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [landingPreviewIdx, setLandingPreviewIdx] = useState<number>(0);
 
   // Review results state
   const [reviewIssues, setReviewIssues] = useState<ReviewIssue[]>([]);
@@ -243,6 +244,36 @@ export default function ChatInterface() {
     Object.entries(enabledSources)
       .filter(([, enabled]) => enabled)
       .map(([id]) => id);
+
+  // Build a combined preview list (main doc + references) with blob URLs.
+  // Managed in useMemo so object URLs are revoked when files change.
+  const previewDocs = useMemo(() => {
+    const docs: { name: string; url: string; kind: "content" | "reference" }[] =
+      [];
+    if (documentFile && documentFile.type === "application/pdf") {
+      docs.push({
+        name: documentFile.name,
+        url: URL.createObjectURL(documentFile),
+        kind: "content",
+      });
+    }
+    for (const f of referenceFiles) {
+      if (f.type === "application/pdf") {
+        docs.push({
+          name: f.name,
+          url: URL.createObjectURL(f),
+          kind: "reference",
+        });
+      }
+    }
+    return docs;
+  }, [documentFile, referenceFiles]);
+
+  useEffect(() => {
+    return () => {
+      for (const d of previewDocs) URL.revokeObjectURL(d.url);
+    };
+  }, [previewDocs]);
 
   const { isLoading, setIsLoading } = useGlobal();
   const auth = useAuth();
@@ -656,7 +687,7 @@ export default function ChatInterface() {
             />
 
             {/* Document Preview (shown when a PDF is selected) */}
-            {documentUrl && (
+            {previewDocs.length > 0 && (
               <details
                 open
                 className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-200 dark:border-gray-700 overflow-hidden group"
@@ -679,9 +710,43 @@ export default function ChatInterface() {
                     />
                   </svg>
                 </summary>
+                {previewDocs.length > 1 && (
+                  <div className="flex items-end gap-1 px-3 pt-2 bg-gray-50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-700 overflow-x-auto">
+                    {previewDocs.map((doc, idx) => {
+                      const isActive =
+                        idx ===
+                        Math.min(landingPreviewIdx, previewDocs.length - 1);
+                      return (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            setLandingPreviewIdx(idx);
+                          }}
+                          className={`max-w-[18rem] shrink-0 px-3 py-2 rounded-t-lg text-xs font-medium flex items-center gap-1.5 border-t border-x transition-colors ${
+                            isActive
+                              ? "bg-white dark:bg-gray-800 text-gray-900 dark:text-white border-gray-200 dark:border-gray-700 shadow-sm"
+                              : "bg-transparent text-gray-600 dark:text-gray-400 hover:bg-white/60 border-transparent"
+                          }`}
+                          title={doc.name}
+                        >
+                          <span className="text-sm leading-none">
+                            {doc.kind === "content" ? "📄" : "📎"}
+                          </span>
+                          <span className="truncate">{doc.name}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
                 <div className="h-[600px] overflow-hidden">
                   <iframe
-                    src={documentUrl}
+                    src={
+                      previewDocs[
+                        Math.min(landingPreviewIdx, previewDocs.length - 1)
+                      ]?.url
+                    }
                     className="w-full h-full"
                     title="PDF Document"
                   />
@@ -773,6 +838,7 @@ export default function ChatInterface() {
             phaseDone={phaseDone}
             startedAt={reviewStartedAt}
             documentUrl={documentUrl}
+            previewDocs={previewDocs}
             onNewReview={startNewChat}
           />
         </div>
