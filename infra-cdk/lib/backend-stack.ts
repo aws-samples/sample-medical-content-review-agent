@@ -323,6 +323,15 @@ export class BackendStack extends cdk.NestedStack {
       })
     )
 
+    // Grant S3 read permissions for user-uploaded content (PDFs, references)
+    agentRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ["s3:GetObject"],
+        resources: [`arn:aws:s3:::${this.stagingBucketName}/uploads/*`],
+      })
+    )
+
     // Create the runtime using L2 construct
     // requestHeaderConfiguration allows the agent to read the Authorization header
     // from RequestContext.request_headers, which is needed to securely extract the
@@ -586,7 +595,9 @@ export class BackendStack extends cdk.NestedStack {
         lambda.LayerVersion.fromLayerVersionArn(
           this,
           "PowertoolsLayerUpload",
-          `arn:aws:lambda:${cdk.Stack.of(this).region}:017000801446:layer:AWSLambdaPowertoolsPythonV3-python313-arm64:18`
+          `arn:aws:lambda:${
+            cdk.Stack.of(this).region
+          }:017000801446:layer:AWSLambdaPowertoolsPythonV3-python313-arm64:18`
         ),
       ],
       logGroup: new logs.LogGroup(this, "UploadLambdaLogGroup", {
@@ -1138,7 +1149,7 @@ export class BackendStack extends cdk.NestedStack {
     if (s3ReaderLambda) {
       createGatewayTarget(
         "S3BdaReaderTarget",
-        "s3-bda-reader-target",
+        "s3-reader-target",
         "S3 file reader (text and PDF)",
         s3ReaderLambda,
         "../../gateway/tools/s3_reader/tool_spec.json"
