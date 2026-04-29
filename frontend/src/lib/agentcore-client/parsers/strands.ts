@@ -3,6 +3,12 @@
 
 import type { ChunkParser } from "../types";
 
+// Track which toolUseIds we've already emitted `tool_use_start` for within this
+// parser instance. Parallel tool calls and single-shot input JSON (where the
+// first delta already has non-empty input) both fail the old empty-string check,
+// so we key off first-sighting of the toolUseId instead.
+const startedToolUseIds = new Set<string>();
+
 /**
  * Parses SSE chunks from Strands agents.
  * Emits typed StreamEvents for text, tool use, messages, and lifecycle.
@@ -25,18 +31,21 @@ export const parseStrandsChunk: ChunkParser = (line, callback) => {
     // Tool use streaming
     if (json.current_tool_use) {
       const tool = json.current_tool_use;
-      // First delta for a tool has empty input — treat as start
-      if (json.delta?.toolUse?.input === "") {
+      const id = tool.toolUseId;
+      if (id && !startedToolUseIds.has(id)) {
+        startedToolUseIds.add(id);
         callback({
           type: "tool_use_start",
-          toolUseId: tool.toolUseId,
+          toolUseId: id,
           name: tool.name,
         });
-      } else if (json.delta?.toolUse?.input) {
+      }
+      const input = json.delta?.toolUse?.input;
+      if (typeof input === "string" && input.length > 0) {
         callback({
           type: "tool_use_delta",
-          toolUseId: tool.toolUseId,
-          input: json.delta.toolUse.input,
+          toolUseId: id,
+          input,
         });
       }
       return;
