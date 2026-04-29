@@ -57,7 +57,7 @@ def _slice_lines(text: str, start_line: int, end_line: int) -> tuple[str, int]:
     return content, total
 
 
-def read_pdf_file(s3_uri: str, start_line: int = 1, end_line: int = 500) -> str:
+def read_pdf_file(s3_uri: str, start_line: int = 1, end_line: int = 5000) -> str:
     """
     Download a PDF from S3, convert to markdown, and return a line range.
 
@@ -79,14 +79,17 @@ def read_pdf_file(s3_uri: str, start_line: int = 1, end_line: int = 500) -> str:
         markdown = pymupdf4llm.to_markdown(tmp.name, show_progress=False)
 
     content, total = _slice_lines(markdown, start_line, end_line)
+    shown_end = min(end_line, total)
+    complete = start_line == 1 and shown_end >= total
+    eof_note = " [COMPLETE FILE RETURNED]" if complete else ""
     header = (
         f"File: {s3_uri} (PDF, {total} lines total, "
-        f"showing lines {start_line}-{min(end_line, total)})"
+        f"showing lines {start_line}-{shown_end}){eof_note}"
     )
     return f"{header}\n\n{content}"
 
 
-def read_text_file(s3_uri: str, start_line: int = 1, end_line: int = 500) -> str:
+def read_text_file(s3_uri: str, start_line: int = 1, end_line: int = 5000) -> str:
     """
     Read a text file from S3 and return a range of lines.
 
@@ -110,9 +113,12 @@ def read_text_file(s3_uri: str, start_line: int = 1, end_line: int = 500) -> str
         text = body.decode("latin-1")
 
     content, total = _slice_lines(text, start_line, end_line)
+    shown_end = min(end_line, total)
+    complete = start_line == 1 and shown_end >= total
+    eof_note = " [COMPLETE FILE RETURNED]" if complete else ""
     header = (
         f"File: {s3_uri} ({total} lines total, "
-        f"showing lines {start_line}-{min(end_line, total)})"
+        f"showing lines {start_line}-{shown_end}){eof_note}"
     )
     return f"{header}\n\n{content}"
 
@@ -139,7 +145,7 @@ def handler(event, context):
                 return {"error": "Missing required parameter: s3_uri"}
 
             start_line = event.get("start_line", 1)
-            end_line = event.get("end_line", 500)
+            end_line = event.get("end_line", 5000)
             if not isinstance(start_line, int) or start_line < 1:
                 start_line = 1
             if not isinstance(end_line, int) or end_line < start_line:
