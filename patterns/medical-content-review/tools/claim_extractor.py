@@ -1,6 +1,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
 """Claim extractor: extracts medical claims/statements from PDF page batches."""
+
 import json
 import os
 import re
@@ -15,7 +16,10 @@ from strands import tool
 s3_client = boto3.client("s3")
 bedrock_client = boto3.client("bedrock-runtime")
 
-MODEL_ID = os.environ.get("EXTRACTOR_MODEL_ID", "anthropic.claude-sonnet-4-20250514-v1:0")
+MODEL_ID = os.environ.get(
+    "EXTRACTOR_MODEL_ID",
+    os.environ.get("MODEL_ID", "global.anthropic.claude-sonnet-4-6"),
+)
 
 SYSTEM = """Extract claims/statements from medical content page images that need fact-checking.
 For each, provide: text (exact quote), reference (if any), full_claim (normalized), page number.
@@ -47,7 +51,9 @@ def _xml_to_claims(xml_str: str) -> list:
         claim = {}
         for child in item:
             val = (child.text or "").strip()
-            claim[child.tag] = int(val) if child.tag == "page" and val.isdigit() else val
+            claim[child.tag] = (
+                int(val) if child.tag == "page" and val.isdigit() else val
+            )
         claims.append(claim)
     return claims
 
@@ -70,10 +76,18 @@ def extract_claims(s3_uri: str, pages: list[int]) -> str:
 
         content = []
         for page_num in pages:
-            images = convert_from_path(tmp.name, dpi=200, first_page=page_num, last_page=page_num, thread_count=2)
+            images = convert_from_path(
+                tmp.name,
+                dpi=200,
+                first_page=page_num,
+                last_page=page_num,
+                thread_count=2,
+            )
             buf = BytesIO()
             images[0].save(buf, format="JPEG")
-            content.append({"image": {"format": "jpeg", "source": {"bytes": buf.getvalue()}}})
+            content.append(
+                {"image": {"format": "jpeg", "source": {"bytes": buf.getvalue()}}}
+            )
         content.append({"text": PROMPT})
 
         response = bedrock_client.converse(
