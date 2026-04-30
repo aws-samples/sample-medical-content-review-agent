@@ -131,6 +131,6 @@ Note: this asset represents a proof-of-value for the services included and is no
 
 ## 👤 Team
 
-| ![image](docs/figures/team/nikita.jpeg) | ![image](docs/figures/team/aiham.jpeg) | ![image](docs/figures/team/jack.jpeg) | ![image](docs/figures/team/elizaveta.jpeg) |
-|---|---|---|---|
-| [Nikita Kozodoi](https://www.linkedin.com/in/kozodoi/) | [Aiham Taleb](https://www.linkedin.com/in/aihamtaleb/) | [Jack Butler](https://www.linkedin.com/in/jackbutler-a/) | [Elizaveta Zinovyeva](https://www.linkedin.com/in/zinov-liza/) |
+| ![image](docs/figures/team/nikita.jpeg)  | ![image](docs/figures/team/elizaveta.jpeg) | ![image](docs/figures/team/aiham.jpeg) |
+|---|---|---|
+| [Nikita Kozodoi](https://www.linkedin.com/in/kozodoi/) | [Elizaveta Zinovyeva](https://www.linkedin.com/in/zinov-liza/) |  [Aiham Taleb](https://www.linkedin.com/in/aihamtaleb/) |
