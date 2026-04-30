@@ -1,6 +1,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
 """PDF processor: converts PDF pages to images and extracts text via multimodal OCR."""
+
 import os
 import tempfile
 from io import BytesIO
@@ -13,7 +14,10 @@ s3_client = boto3.client("s3")
 bedrock_client = boto3.client("bedrock-runtime")
 
 MAX_PAGES_PER_CALL = 50
-OCR_MODEL_ID = os.environ.get("OCR_MODEL_ID", "anthropic.claude-sonnet-4-20250514-v1:0")
+OCR_MODEL_ID = os.environ.get(
+    "OCR_MODEL_ID",
+    os.environ.get("MODEL_ID", "global.anthropic.claude-sonnet-4-6"),
+)
 
 OCR_SYSTEM = "Extract ALL text from the page image as clean markdown. Preserve headings, lists, tables, footnotes, references. Describe visual elements in [brackets]."
 
@@ -25,7 +29,9 @@ def _parse_s3_uri(s3_uri: str) -> tuple[str, str]:
 
 
 @tool
-def process_pdf(s3_uri: str, start_page: int = 1, end_page: int = 0, dpi: int = 200) -> str:
+def process_pdf(
+    s3_uri: str, start_page: int = 1, end_page: int = 0, dpi: int = 200
+) -> str:
     """Process a medical content PDF from S3: converts pages to images and extracts text via multimodal OCR.
 
     Args:
@@ -52,23 +58,40 @@ def process_pdf(s3_uri: str, start_page: int = 1, end_page: int = 0, dpi: int = 
 
         document_markdown = ""
         for page_idx in range(start_page, actual_end + 1):
-            images = convert_from_path(tmp.name, dpi=dpi, first_page=page_idx, last_page=page_idx, thread_count=2)
+            images = convert_from_path(
+                tmp.name,
+                dpi=dpi,
+                first_page=page_idx,
+                last_page=page_idx,
+                thread_count=2,
+            )
             buf = BytesIO()
             images[0].save(buf, format="JPEG")
 
             response = bedrock_client.converse(
                 modelId=OCR_MODEL_ID,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"text": f"Extract all text from page {page_idx} as markdown."},
-                        {"image": {"format": "jpeg", "source": {"bytes": buf.getvalue()}}},
-                    ],
-                }],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "text": f"Extract all text from page {page_idx} as markdown."
+                            },
+                            {
+                                "image": {
+                                    "format": "jpeg",
+                                    "source": {"bytes": buf.getvalue()},
+                                }
+                            },
+                        ],
+                    }
+                ],
                 system=[{"text": OCR_SYSTEM}],
                 inferenceConfig={"maxTokens": 8192, "temperature": 0},
             )
             page_text = response["output"]["message"]["content"][0]["text"].strip()
-            document_markdown += f"\n<page_{page_idx}>\n{page_text}\n</page_{page_idx}>\n"
+            document_markdown += (
+                f"\n<page_{page_idx}>\n{page_text}\n</page_{page_idx}>\n"
+            )
 
     return f"Processed pages {start_page}-{actual_end} of {total_pages} from {s3_uri}\n\n{document_markdown}"

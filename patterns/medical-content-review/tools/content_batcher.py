@@ -1,6 +1,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
 """Content batcher: splits PDF pages into logical batches using multimodal LLM."""
+
 import ast
 import json
 import os
@@ -14,7 +15,10 @@ from strands import tool
 s3_client = boto3.client("s3")
 bedrock_client = boto3.client("bedrock-runtime")
 
-MODEL_ID = os.environ.get("BATCHER_MODEL_ID", "anthropic.claude-sonnet-4-20250514-v1:0")
+MODEL_ID = os.environ.get(
+    "BATCHER_MODEL_ID",
+    os.environ.get("MODEL_ID", "global.anthropic.claude-sonnet-4-6"),
+)
 
 SYSTEM = """You split medical content pages into logical chunks.
 Group each content page with its associated reference/footnote pages.
@@ -56,17 +60,29 @@ def batch_content(s3_uri: str, batch_size: int = 5) -> str:
 
         while page_idx <= total_pages:
             end = min(page_idx + batch_size - 1, total_pages)
-            images = convert_from_path(tmp.name, dpi=150, first_page=page_idx, last_page=end, thread_count=2)
+            images = convert_from_path(
+                tmp.name, dpi=150, first_page=page_idx, last_page=end, thread_count=2
+            )
 
             if len(images) <= 1:
                 all_batches.append([page_idx])
                 break
 
-            content = [{"image": {"format": "jpeg", "source": {"bytes": BytesIO(b"").getvalue()}}} for _ in images]
+            content = [
+                {
+                    "image": {
+                        "format": "jpeg",
+                        "source": {"bytes": BytesIO(b"").getvalue()},
+                    }
+                }
+                for _ in images
+            ]
             for i, img in enumerate(images):
                 buf = BytesIO()
                 img.save(buf, format="JPEG")
-                content[i] = {"image": {"format": "jpeg", "source": {"bytes": buf.getvalue()}}}
+                content[i] = {
+                    "image": {"format": "jpeg", "source": {"bytes": buf.getvalue()}}
+                }
             content.append({"text": PROMPT})
 
             response = bedrock_client.converse(
