@@ -4,9 +4,10 @@ This directory contains the AWS CDK infrastructure code for deploying the soluti
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 20+
 - AWS CLI configured with appropriate credentials
 - AWS CDK CLI installed: `npm install -g aws-cdk`
+- Docker installed and running (required for Lambda Docker bundling and the agent container build)
 
 ## Minimal IAM Policy for Deployment
 
@@ -58,25 +59,38 @@ npx cdk deploy --all
 Edit `config.yaml` to customize your deployment:
 
 ```yaml
-stack_name_base: "adr-stack"
+stack_name_base: medical-content-review
 region: null  # AWS region (e.g., us-west-2). If null, uses AWS CLI default region.
 
-admin_user_email: admin@example.com  # Required: Email for the admin user
+admin_user_email: null  # Optional: auto-create an admin Cognito user and email credentials
 
 backend:
-  pattern: "medical-content-review"
+  pattern: medical-content-review
+  deployment_type: docker  # docker (default) or zip
+  model_id: global.anthropic.claude-sonnet-4-6
 
-# Research tools: enabled = deployed, default_on = toggled on in UI by default
+# Reference-verification tools: enabled = deployed, default_on = toggled on in UI by default
 tools:
-  tavily:
+  pubmed:
+    enabled: true
+    default_on: true
+  openfda:
+    enabled: true
+    default_on: true
+  clinicaltrials:
+    enabled: true
+    default_on: true
+  s3:
     enabled: true
     default_on: true
   nova:
     enabled: true
-    default_on: true
-  arxiv:
-    enabled: true
     default_on: false
+  bedrock_kb:
+    enabled: false
+    default_on: false
+    required:
+      knowledge_base_id: null
   ...
 
 ```
@@ -86,16 +100,22 @@ tools:
 ```
 infra-cdk/
 ├── bin/
-│   └── adr-cdk.ts           # CDK app entry point
+│   └── adr-cdk.ts              # CDK app entry point
 ├── lib/
-│   ├── adr-main-stack.ts     # Main orchestrator stack
-│   ├── backend-stack.ts     # Backend/AgentCore stack
-│   ├── frontend-stack.ts    # Frontend/CloudFront stack
-│   └── utils/               # Utility functions and constructs
+│   ├── adr-main-stack.ts       # Main orchestrator stack
+│   ├── cognito-stack.ts        # Cognito User Pool nested stack
+│   ├── backend-stack.ts        # Backend nested stack (AgentCore, Gateway, Lambdas, APIs)
+│   ├── amplify-hosting-stack.ts # Amplify Hosting nested stack for the frontend
+│   └── utils/                  # Utility functions (config-manager, agentcore-role)
+├── lambdas/                    # Lambda function code (feedback, upload, zip-packager)
+├── scripts/
+│   └── post-deploy.js          # Runs after cdk deploy (triggers frontend deploy)
 ├── test/
-│   └── adr-cdk.test.ts      # Unit tests
-├── cdk.json                 # CDK configuration
-├── config.yaml              # Application configuration
+│   └── adr-cdk.test.ts         # Unit tests
+├── cdk.json                    # CDK configuration
+├── config.yaml                 # Deployment configuration (gitignored)
+├── .config_example.yaml        # Example configuration (tracked)
+├── minimal-deploy-policy.json  # Minimum IAM policy for deployment
 ├── package.json
 └── tsconfig.json
 ```
@@ -114,32 +134,20 @@ npm run watch
 
 ## Deployment Details
 
-The CDK deployment creates multiple stacks with a specific deployment order:
+The CDK deployment is orchestrated by `ADRMainStack`, which instantiates three nested stacks. The construction order inside `adr-main-stack.ts` is:
 
 ### Stack Architecture & Deployment Order
 
-1. **Cognito Stack** (CognitoStack):
-   - Cognito User Pool for user authentication
-   - User Pool Client for frontend OAuth flows
-   - User Pool Domain for hosted UI
-
-2. **Backend Stack** (BackendStack):
-   - **Machine Client & Resource Server**: OAuth2 client credentials for service-to-service auth
-   - **AgentCore Gateway**: API gateway for tool integration with Lambda targets
-   - **AgentCore Runtime**: Bedrock AgentCore runtime for agent execution
-   - **Supporting Resources**: IAM roles, DynamoDB tables, API Gateway for feedback
-
-3. **Amplify Hosting Stack** (AmplifyHostingStack):
-   - Amplify app for frontend hosting
-   - Branch configuration for deployments
-   - Custom domain setup (if configured)
+1. **Amplify Hosting Stack** (`AmplifyHostingStack`): created first so its predictable Amplify URL is available to downstream stacks. Creates the staging S3 bucket and the Amplify app/branch.
+2. **Cognito Stack** (`CognitoStack`): User Pool, User Pool Client, and User Pool Domain. Callback URLs include both `http://localhost:3000` (for local development) and the Amplify URL.
+3. **Backend Stack** (`BackendStack`): AgentCore Runtime + Memory + Gateway, tool Lambdas, feedback API + DynamoDB table, upload Lambda, SSM parameters, and Secrets Manager entries. Imports Cognito and Amplify resources from the other stacks.
 
 ### Component Dependencies
 
 Within the Backend Stack, components are created in this order:
-1. **Cognito Integration**: Import user pool from Cognito stack
+1. **Cognito Integration**: Import User Pool and User Pool Client from the Cognito stack
 2. **Machine Client**: Create OAuth2 client for M2M authentication
-3. **Gateway**: Create AgentCore Gateway (depends on machine client)
+3. **Gateway**: Create AgentCore Gateway (depends on machine client) and register enabled tool Lambdas as targets
 4. **Runtime**: Create AgentCore Runtime (independent of gateway)
 
 This order ensures authentication components are available before services that depend on them, while keeping the runtime deployment separate since it doesn't directly depend on the gateway.
@@ -190,21 +198,23 @@ This approach maintains clean Docker builds with clear separation between shared
 
 ### Key Resources Created
 
-1. **Backend Stack**:
-   - Cognito User Pool integration and machine client
-   - AgentCore Gateway with Lambda tool targets
-   - AgentCore Runtime for agent execution
-   - ECR repository for agent container images
-   - CodeBuild project for container builds
-   - DynamoDB table for application data
-   - API Gateway for feedback endpoints
-   - IAM roles and policies
+1. **Cognito Stack**:
+   - User Pool for end-user sign-in
+   - User Pool Client for the frontend OAuth flow
+   - User Pool Domain for the hosted UI
+   - (Optional) auto-created admin user when `admin_user_email` is set
 
-2. **Amplify Hosting Stack**:
-   - Amplify app for frontend deployment
-   - Automatic builds from Git branches
-   - Custom domain and SSL certificate integration
-   - Environment-specific deployments
+2. **Backend Stack**:
+   - Cognito machine client + resource server for M2M authentication
+   - AgentCore Gateway with Lambda tool targets (one Lambda per enabled tool)
+   - AgentCore Runtime (Docker or zip packaging) and AgentCore Memory
+   - Feedback API Gateway + DynamoDB table
+   - Upload Lambda for pre-signed S3 URLs
+   - SSM parameters and Secrets Manager entries for runtime configuration
+
+3. **Amplify Hosting Stack**:
+   - S3 staging bucket (with access logging) used for deployment artifacts and file uploads/reports
+   - Amplify Hosting app and branch for the React frontend
 
 ## Troubleshooting
 

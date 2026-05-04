@@ -190,9 +190,9 @@ cdk deploy                # Backend only
 
 ## Next Steps
 
-- Customize the agent code in `patterns/`
+- Customize the agent code in `patterns/medical-content-review/`
 - Modify the frontend in `frontend/src/`
-- Add new tools in `tools/` or `gateway/tools/`
+- Add new Gateway tools in `gateway/tools/`
 - Update infrastructure in `infra-cdk/`
 
 Remember: Changes to infrastructure require redeployment via CDK, not just Docker Compose restart.

@@ -1,6 +1,5 @@
-# Copyright Amazon.com, Inc. or its affiliates.
-# AWS Content under the AWS Enterprise Agreement or
-# AWS Customer Agreement (as applicable).
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
 
 from typing import Any
 

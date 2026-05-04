@@ -53,8 +53,11 @@ change anything:
   "feedbackApiUrl": "https://your-api-gateway-url",
   "agentPattern": "medical-content-review",
   "tools": {
-    "tavily": { "enabled": true, "default_on": true },
-    "nova": { "enabled": true, "default_on": true }
+    "pubmed": { "enabled": true, "default_on": true },
+    "openfda": { "enabled": true, "default_on": true },
+    "clinicaltrials": { "enabled": true, "default_on": true },
+    "s3": { "enabled": true, "default_on": true },
+    "nova": { "enabled": true, "default_on": false }
   }
 }
 ```
