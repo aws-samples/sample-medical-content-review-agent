@@ -160,52 +160,6 @@ uv run test-scripts/test-gateway.py
 
 ---
 
-### test-arxiv-tool.py
-
-Tests the ArXiv search tool via AgentCore Gateway.
-
-**Usage:**
-
-```bash
-uv run test-scripts/test-arxiv-tool.py
-```
-
-**What it does:**
-
-1. Authenticates with Gateway using machine credentials
-2. Lists available tools and finds arxiv_search
-3. Executes a test search for "large language models agents"
-4. Displays formatted search results
-
----
-
-### test-deep-research-agent.py
-
-Tests the Medical Content Review Agent via AgentCore Runtime with streaming.
-
-**Usage:**
-
-```bash
-# Default query
-uv run test-scripts/test-deep-research-agent.py
-
-# Custom query
-uv run test-scripts/test-deep-research-agent.py "Review this medical content for adherence"
-```
-
-**Prerequisites:**
-
-- Deployed stack with `medical-content-review` pattern
-- `ACCESS_TOKEN` environment variable set with valid Cognito token
-
-**What it does:**
-
-1. Sends research query to the Medical Content Review Agent
-2. Streams the response including tool calls
-3. Shows file operations and data retrieval in real-time
-
----
-
 ### test_nova_local.py
 
 Tests Nova web search locally using the Bedrock Converse API with the web grounding tool.
@@ -226,18 +180,6 @@ Tests the OpenFDA drug search tool locally without AWS dependencies by calling t
 
 ```bash
 uv run test-scripts/test_openfda_local.py
-```
-
----
-
-### test_tavily_local.py
-
-Tests the Tavily web search SDK locally using an API key from AWS Secrets Manager.
-
-**Usage:**
-
-```bash
-uv run test-scripts/test_tavily_local.py
 ```
 
 ---

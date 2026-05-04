@@ -103,10 +103,11 @@ medical-content-review/
 │   ├── public/             # Static assets and aws-exports.json
 │   └── package.json
 ├── infra-cdk/               # CDK infrastructure code
-│   ├── lib/                # CDK stack definitions
+│   ├── lib/                # CDK stack definitions (main, cognito, backend, amplify-hosting)
 │   ├── bin/                # CDK app entry point
-│   ├── lambdas/            # Lambda function code (feedback, upload)
-│   ├── .config_example.yaml # Example deployment configuration
+│   ├── lambdas/            # Lambda function code (feedback, upload, zip-packager)
+│   ├── scripts/            # post-deploy.js (triggers frontend deploy)
+│   ├── .config_example.yaml # Example deployment configuration (tracked)
 │   └── config.yaml         # Your deployment configuration (gitignored)
 ├── patterns/               # Agent pattern implementations
 │   └── medical-content-review/ # Medical review agent
@@ -116,11 +117,13 @@ medical-content-review/
 │       ├── tools/                  # PDF processor, claim extractor, etc.
 │       ├── requirements.txt
 │       └── Dockerfile
-├── gateway/                # Gateway utilities and tools
-│   └── tools/              # Gateway tool implementations
+├── gateway/                # Gateway utilities and tool Lambda code
+│   └── tools/              # Gateway tool implementations (pubmed, openfda, clinicaltrials, s3, nova, kb, sample)
 ├── docker/                 # Local development Docker setup
-│   └── docker-compose.yml
-├── scripts/                # Deployment and test scripts
+│   ├── docker-compose.yml
+│   └── Dockerfile.frontend.dev
+├── scripts/                # Deployment scripts (deploy-frontend.py, utils.py)
+├── test-scripts/           # Verification and test scripts
 ├── docs/                   # Documentation
 └── README.md
 ```
