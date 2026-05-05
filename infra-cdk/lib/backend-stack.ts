@@ -18,7 +18,6 @@ import * as cr from "aws-cdk-lib/custom-resources"
 import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch"
 import * as cw_actions from "aws-cdk-lib/aws-cloudwatch-actions"
 import * as sns from "aws-cdk-lib/aws-sns"
-import * as cloudtrail from "aws-cdk-lib/aws-cloudtrail"
 import * as wafv2 from "aws-cdk-lib/aws-wafv2"
 import { Construct, IConstruct } from "constructs"
 import { AppConfig } from "./utils/config-manager"
@@ -62,7 +61,7 @@ export class BackendStack extends cdk.NestedStack {
     this.stagingBucket = props.stagingBucket
 
     // Single SNS topic used by all Lambda CloudWatch alarms in this stack.
-    // No subscription configured in PoC; add an email subscription when needed.
+    // No subscription configured; add an email subscription when needed.
     this.alarmTopic = new sns.Topic(this, "LambdaAlarmTopic", {
       displayName: `${props.config.stack_name_base}-lambda-alarms`,
     })
@@ -72,6 +71,7 @@ export class BackendStack extends cdk.NestedStack {
     // cr.Provider framework Lambdas) that cannot be referenced directly.
     // Matches by synthesized CFN type so it catches both lambda.CfnFunction and
     // CustomResourceProvider-generated Lambdas.
+    const stackSelf = this
     cdk.Aspects.of(this).add({
       visit(node: IConstruct) {
         if (
@@ -79,6 +79,7 @@ export class BackendStack extends cdk.NestedStack {
           node.cfnResourceType === "AWS::Lambda::Function"
         ) {
           node.addPropertyOverride("TracingConfig", { Mode: "Active" })
+          stackSelf.ensureCfnLambdaErrorsAlarm(node)
         }
       },
     })
@@ -123,9 +124,6 @@ export class BackendStack extends cdk.NestedStack {
 
     // Create Feedback DynamoDB table (example of application data storage)
     const feedbackTable = this.createFeedbackTable(props.config)
-
-    // Capture DynamoDB data-plane events for the feedback table via CloudTrail.
-    this.createFeedbackTableTrail(props.config, feedbackTable)
 
     // Create API Gateway Feedback API resources (example of best-practice API Gateway + Lambda
     // pattern)
@@ -571,20 +569,24 @@ export class BackendStack extends cdk.NestedStack {
       },
       deployOptions: {
         stageName: "prod",
-        throttlingRateLimit: 100,
-        throttlingBurstLimit: 200,
-        cachingEnabled: true,
         cacheClusterEnabled: true,
         cacheClusterSize: "0.5",
-        cacheTtl: cdk.Duration.minutes(5),
+        // All method-level settings (cache, logging, metrics, throttling) go
+        // through methodOptions so CFN emits a single MethodSettings entry per
+        // resource path. Scanners flag stages where the first MethodSettings
+        // entry is missing any one of these controls.
         methodOptions: {
           "/*/*": {
+            cachingEnabled: true,
+            cacheTtl: cdk.Duration.minutes(5),
             cacheDataEncrypted: true,
+            loggingLevel: apigateway.MethodLoggingLevel.INFO,
+            dataTraceEnabled: true,
+            metricsEnabled: true,
+            throttlingRateLimit: 100,
+            throttlingBurstLimit: 200,
           },
         },
-        loggingLevel: apigateway.MethodLoggingLevel.INFO,
-        dataTraceEnabled: true,
-        metricsEnabled: true,
         accessLogDestination: new apigateway.LogGroupLogDestination(
           new logs.LogGroup(this, "FeedbackApiAccessLogGroup", {
             logGroupName: `/aws/apigateway/${config.stack_name_base}-api-access`,
@@ -695,6 +697,24 @@ export class BackendStack extends cdk.NestedStack {
           visibilityConfig: {
             cloudWatchMetricsEnabled: true,
             metricName: "AWSManagedRulesCommonRuleSet",
+            sampledRequestsEnabled: true,
+          },
+        },
+        {
+          // Includes the Log4j/Log4Shell (CVE-2021-44228) rule among other
+          // known-bad input patterns.
+          name: "AWS-AWSManagedRulesKnownBadInputsRuleSet",
+          priority: 1,
+          overrideAction: { none: {} },
+          statement: {
+            managedRuleGroupStatement: {
+              vendorName: "AWS",
+              name: "AWSManagedRulesKnownBadInputsRuleSet",
+            },
+          },
+          visibilityConfig: {
+            cloudWatchMetricsEnabled: true,
+            metricName: "AWSManagedRulesKnownBadInputsRuleSet",
             sampledRequestsEnabled: true,
           },
         },
@@ -939,6 +959,8 @@ export class BackendStack extends cdk.NestedStack {
           ],
         })
       )
+
+      this.addLambdaAlarms(novaSearchLambda, "NovaSearch")
     }
 
     // OpenFDA Drug Search Lambda
@@ -957,6 +979,8 @@ export class BackendStack extends cdk.NestedStack {
           removalPolicy: cdk.RemovalPolicy.DESTROY,
         }),
       })
+
+      this.addLambdaAlarms(openfdaLambda, "OpenFDASearch")
     }
 
     // PubMed Search Lambda
@@ -975,6 +999,8 @@ export class BackendStack extends cdk.NestedStack {
           removalPolicy: cdk.RemovalPolicy.DESTROY,
         }),
       })
+
+      this.addLambdaAlarms(pubmedLambda, "PubMedSearch")
     }
 
     // ClinicalTrials.gov Search Lambda
@@ -996,6 +1022,8 @@ export class BackendStack extends cdk.NestedStack {
           removalPolicy: cdk.RemovalPolicy.DESTROY,
         }),
       })
+
+      this.addLambdaAlarms(clinicaltrialsLambda, "ClinicalTrialsSearch")
     }
 
     // FRED Economic Data Lambda
@@ -1441,64 +1469,40 @@ export class BackendStack extends cdk.NestedStack {
   }
 
   /**
-   * Dedicated CloudTrail trail that captures DynamoDB data-plane events for the
-   * FeedbackTable only. Management events are disabled to keep cost minimal.
-   * Uses L1 CfnTrail because DataResourceType.DYNAMODB_TABLE is not exposed by
-   * the L2 Trail construct's enum.
+   * Track which Lambda construct paths already have alarms wired via
+   * addLambdaAlarms so the Aspect can skip them.
    */
-  private createFeedbackTableTrail(config: AppConfig, feedbackTable: dynamodb.Table): void {
-    const logBucket = new s3.Bucket(this, "FeedbackTrailLogBucket", {
-      encryption: s3.BucketEncryption.S3_MANAGED,
-      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      enforceSSL: true,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-      autoDeleteObjects: true,
-      lifecycleRules: [{ expiration: cdk.Duration.days(30) }],
-    })
+  private alarmedLambdaPaths: Set<string> = new Set<string>()
 
-    // Bucket policy required by CloudTrail to write log files.
-    logBucket.addToResourcePolicy(
-      new iam.PolicyStatement({
-        sid: "AWSCloudTrailAclCheck",
-        effect: iam.Effect.ALLOW,
-        principals: [new iam.ServicePrincipal("cloudtrail.amazonaws.com")],
-        actions: ["s3:GetBucketAcl"],
-        resources: [logBucket.bucketArn],
-      })
-    )
-    logBucket.addToResourcePolicy(
-      new iam.PolicyStatement({
-        sid: "AWSCloudTrailWrite",
-        effect: iam.Effect.ALLOW,
-        principals: [new iam.ServicePrincipal("cloudtrail.amazonaws.com")],
-        actions: ["s3:PutObject"],
-        resources: [`${logBucket.bucketArn}/AWSLogs/${this.account}/*`],
-        conditions: {
-          StringEquals: { "s3:x-amz-acl": "bucket-owner-full-control" },
-        },
-      })
-    )
-
-    new cloudtrail.CfnTrail(this, "FeedbackTableTrail", {
-      trailName: `${config.stack_name_base}-feedback-trail`,
-      s3BucketName: logBucket.bucketName,
-      isLogging: true,
-      includeGlobalServiceEvents: false,
-      isMultiRegionTrail: false,
-      enableLogFileValidation: true,
-      eventSelectors: [
-        {
-          readWriteType: "All",
-          includeManagementEvents: false,
-          dataResources: [
-            {
-              type: "AWS::DynamoDB::Table",
-              values: [feedbackTable.tableArn],
-            },
-          ],
-        },
-      ],
+  /**
+   * Attach a minimal Errors alarm to any Lambda CFN resource that doesn't
+   * already have one wired via addLambdaAlarms. Used from the Aspect to cover
+   * CDK-generated singleton Lambdas (custom-resource providers, s3
+   * autoDeleteObjects handlers) that scanners still expect to be monitored.
+   */
+  private ensureCfnLambdaErrorsAlarm(node: cdk.CfnResource): void {
+    // The CFN resource lives under the L2 Lambda construct's path; checking
+    // the parent path lets us skip anything already covered by addLambdaAlarms.
+    const parentPath = node.node.scope?.node.path
+    if (parentPath && this.alarmedLambdaPaths.has(parentPath)) {
+      return
+    }
+    const logicalId = cdk.Stack.of(node).resolve(node.logicalId) as string
+    const alarm = new cloudwatch.Alarm(this, `${logicalId}AutoErrorsAlarm`, {
+      metric: new cloudwatch.Metric({
+        namespace: "AWS/Lambda",
+        metricName: "Errors",
+        // For AWS::Lambda::Function, Ref returns the function name.
+        dimensionsMap: { FunctionName: node.ref },
+        statistic: "Sum",
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     })
+    alarm.addAlarmAction(new cw_actions.SnsAction(this.alarmTopic))
   }
 
   /**
@@ -1507,6 +1511,7 @@ export class BackendStack extends cdk.NestedStack {
    * ConcurrentExecutions, and DeadLetterErrors.
    */
   private addLambdaAlarms(fn: lambda.IFunction, idPrefix: string): void {
+    this.alarmedLambdaPaths.add(fn.node.path)
     const action = new cw_actions.SnsAction(this.alarmTopic)
 
     const mk = (
