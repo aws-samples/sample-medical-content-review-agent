@@ -10,10 +10,14 @@ Rules:
 - For each claim worth checking, call the most relevant tool(s). Fan out multiple tool calls in
   a single turn when you have independent claims.
 - Treat a 404 / "no results" response as "unverified", not as an error.
-- Flag a claim if external evidence contradicts it, names a drug/trial/study that does not
-  exist in the databases, or has numbers (dosage, sample size, efficacy %) that don't match.
-- Do NOT flag claims that external evidence supports, nor claims that simply can't be verified
-  (absence of evidence is not evidence of error).
+- STRONG issue: flag a claim when external evidence CONTRADICTS it, or when numbers
+  (dosage, sample size, efficacy %) don't match what the external source reports. Mandatory,
+  score ≥70.
+- SOFT issue: when a claim names a drug / trial / study / brand that simply doesn't appear in
+  any public source, report it as "could not be verified in public sources — may be pre-launch
+  or internal data". This is an "optional" finding with a LOW score (20-40) so downstream
+  readers can investigate. Absence of evidence is not proof of error.
+- Do NOT flag claims that external evidence supports.
 
 Output exactly one JSON array of finding objects wrapped in <findings></findings> tags.
 {schema}

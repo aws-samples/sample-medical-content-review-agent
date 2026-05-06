@@ -1,6 +1,6 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-"""Aggregates per-batch reviewer JSONs written under reviews/{session_id}/ into one payload."""
+"""Aggregates per-batch reviewer JSONs, persists them, and returns a pointer."""
 
 import json
 import re
@@ -13,17 +13,26 @@ from reviewers._common import REVIEWS_PREFIX, STAGING_BUCKET
 s3_client = boto3.client("s3")
 
 REVIEWER_KIND_RE = re.compile(r"/(?P<kind>generic|external|internal)_[^/]+\.json$")
+LOCAL_AGGREGATE_PATH = "/tmp/all_findings.json"  # noqa: S108  # nosec B108
 
 
 @tool
 def get_reviews(session_id: str) -> str:
-    """Load every per-batch review JSON for the current session and return them inline.
+    """Aggregate all per-batch reviewer JSONs, save them, and return a pointer.
 
-    Reads all files under `s3://{STAGING_BUCKET}/reviews/{session_id}/`, parses each
-    one as a JSON array of findings, tags each finding with which reviewer produced
-    it (`"reviewer": "generic" | "external" | "internal"`), and returns the
-    concatenation as a JSON string. Use this once all per-batch reviewer calls
-    have finished, before writing the final aggregated `review.json`.
+    Reads every file under `s3://{STAGING_BUCKET}/reviews/{session_id}/`, tags each
+    finding with the reviewer that produced it (`"generic" | "external" | "internal"`),
+    sorts findings by page number, then persists the result in TWO places:
+
+    1. `s3://{STAGING_BUCKET}/reviews/{session_id}/all_findings.json` — the durable
+       record, used for auditing the editor's dedupe decisions after the fact.
+    2. `/tmp/all_findings.json` — local to the AgentCore Runtime container, so the
+       orchestrator can load the full aggregate with `file_read` instead of having
+       the whole payload flow through its context window (where the model may
+       implicitly summarise or drop items).
+
+    Returns a short JSON pointer — the editor is expected to call
+    `file_read("/tmp/all_findings.json")` next to see every finding verbatim.
 
     Parameters
     ----------
@@ -33,8 +42,13 @@ def get_reviews(session_id: str) -> str:
     Returns
     -------
     str
-        A JSON string of shape
-        `{"findings": [...], "counts": {"generic": N, "external": N, "internal": N}}`.
+        A JSON pointer of shape:
+        `{"local_path": "/tmp/all_findings.json",
+          "aggregate_s3_uri": "s3://...",
+          "counts": {"generic": N, "external": N, "internal": N},
+          "total": N,
+          "instruction": "Call file_read('/tmp/all_findings.json') to load every
+                          finding verbatim before editing."}`
     """
     if not STAGING_BUCKET:
         raise RuntimeError("STAGING_BUCKET_NAME environment variable is not set")
@@ -65,4 +79,35 @@ def get_reviews(session_id: str) -> str:
                     findings.append(item)
                     counts[kind] += 1
 
-    return json.dumps({"findings": findings, "counts": counts})
+    # Sort by page (missing/non-int page sinks to the end), preserving within-page
+    # order for stability.
+    def _sort_key(f: dict) -> tuple:
+        page = f.get("page")
+        return (0, page) if isinstance(page, int) else (1, 0)
+
+    findings.sort(key=_sort_key)
+
+    aggregate_key = f"{prefix}all_findings.json"
+    body = json.dumps({"findings": findings, "counts": counts}, indent=2).encode(
+        "utf-8"
+    )
+    s3_client.put_object(
+        Bucket=STAGING_BUCKET,
+        Key=aggregate_key,
+        Body=body,
+        ContentType="application/json",
+    )
+    with open(LOCAL_AGGREGATE_PATH, "wb") as f:
+        f.write(body)
+
+    pointer = {
+        "local_path": LOCAL_AGGREGATE_PATH,
+        "aggregate_s3_uri": f"s3://{STAGING_BUCKET}/{aggregate_key}",
+        "counts": counts,
+        "total": len(findings),
+        "instruction": (
+            f"Call file_read('{LOCAL_AGGREGATE_PATH}') next to load every finding"
+            " verbatim before you start editing the final report."
+        ),
+    }
+    return json.dumps(pointer)

@@ -1,5 +1,6 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
+import copy
 import json
 import os
 import traceback
@@ -72,25 +73,39 @@ def load_system_prompt() -> str:
 def build_context_block(
     session_id: str,
     content_pdf_uri: str | None,
+    content_pdf_name: str | None,
     reference_uris: list[str],
+    reference_names: list[str],
     enabled_sources: list[str],
 ) -> str:
     """Build the per-request input block that gets appended to the user prompt."""
     lines = [
         "## Review inputs",
         f"- session_id: `{session_id}`",
-        f"- content_pdf_uri: `{content_pdf_uri or '(missing)'}`",
-        "- reference_uris:",
+        "- content_pdf:",
+        f"  - s3_uri: `{content_pdf_uri or '(missing)'}`",
+        f"  - original_filename: `{content_pdf_name or '(unknown)'}`",
+        "- references:",
     ]
     if reference_uris:
-        lines.extend(f"  - `{u}`" for u in reference_uris)
+        for i, uri in enumerate(reference_uris):
+            name = (
+                reference_names[i]
+                if i < len(reference_names) and reference_names[i]
+                else "(unknown)"
+            )
+            lines.append(f"  - s3_uri: `{uri}` — original_filename: `{name}`")
     else:
         lines.append("  - (none)")
     lines.append(f"- enabled_sources: {enabled_sources}")
     return "\n".join(lines)
 
 
-def create_medical_review_agent(user_id: str, session_id: str) -> tuple:
+def create_medical_review_agent(
+    user_id: str,
+    session_id: str,
+    external_sources_enabled: bool,
+) -> tuple:
     system_prompt = load_system_prompt()
 
     model_id = os.environ.get("MODEL_ID", "global.anthropic.claude-sonnet-4-6")
@@ -115,16 +130,20 @@ def create_medical_review_agent(user_id: str, session_id: str) -> tuple:
         region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
     )
 
+    # Only expose the external reviewer when at least one external source is
+    # enabled. Removing it from the tool list entirely means the model cannot
+    # call it even if it tries — a stricter guard than a prompt instruction.
     tools = [
         file_read,
         file_write,
         process_pdf,
         batch_content,
         run_generic_review,
-        run_external_review,
         run_internal_review,
         get_reviews,
     ]
+    if external_sources_enabled:
+        tools.insert(5, run_external_review)
 
     review_upload_hook = ReviewS3UploadHook()
 
@@ -194,7 +213,9 @@ async def agent_stream(payload, context: RequestContext):
     enabled_sources = payload.get("enabledSources") or DEFAULT_ENABLED_SOURCES
     enabled_sources = [s for s in enabled_sources if s in ALL_DATA_SOURCES]
     content_pdf_uri = payload.get("contentPdfUri")
+    content_pdf_name = payload.get("contentPdfName") or ""
     reference_uris = payload.get("referenceUris") or []
+    reference_names = payload.get("referenceNames") or []
 
     if not all([user_query, session_id]):
         yield {
@@ -209,14 +230,20 @@ async def agent_stream(payload, context: RequestContext):
         + build_context_block(
             session_id=session_id,
             content_pdf_uri=content_pdf_uri,
+            content_pdf_name=content_pdf_name,
             reference_uris=reference_uris,
+            reference_names=reference_names,
             enabled_sources=enabled_sources,
         )
     )
 
     try:
         user_id = extract_user_id_from_context(context)
-        agent, review_hook = create_medical_review_agent(user_id, session_id)
+        agent, review_hook = create_medical_review_agent(
+            user_id,
+            session_id,
+            external_sources_enabled=bool(enabled_sources),
+        )
 
         _keep_keys = {
             "data",
@@ -231,7 +258,11 @@ async def agent_stream(payload, context: RequestContext):
         }
         stream = agent.stream_async(full_prompt, session_id=session_id)
         async for event in stream:
-            d = {k: v for k, v in dict(event).items() if k in _keep_keys}
+            # Deep-copy the subset of keys we forward so that our frontend-only
+            # truncation and URL injection do NOT mutate the event objects the
+            # agent keeps in its own context — otherwise subsequent tool calls
+            # see silently chopped prior tool results.
+            d = copy.deepcopy({k: v for k, v in dict(event).items() if k in _keep_keys})
             if not d:
                 continue
             if "current_tool_use" in d:
