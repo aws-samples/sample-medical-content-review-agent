@@ -19,10 +19,11 @@ from strands import Agent
 from strands.models import BedrockModel, CacheConfig
 from strands.tools.mcp import MCPClient
 from strands_tools import file_read, file_write
-from tools import process_pdf, batch_content, extract_claims
 from utils.auth import extract_user_id_from_context, get_gateway_access_token
 from utils.inference import get_bedrock_config, get_inference_configs
 from utils.ssm import get_ssm_parameter
+
+from tools import batch_content, extract_claims, process_pdf
 
 INFERENCE_CONFIG, _ = get_inference_configs()
 BEDROCK_CONFIG = get_bedrock_config()
@@ -31,13 +32,9 @@ app = BedrockAgentCoreApp()
 
 SYSTEM_PROMPT_PATH = Path(__file__).parent / "system_prompt.txt"
 
-# Gateway data sources for reference verification
+# External data sources reachable via the AgentCore Gateway, used by the
+# external-review sub-agent to cross-check claims
 ALL_DATA_SOURCES = {
-    "s3": {
-        "name": "S3 Text Reader",
-        "tool": "s3_text_reader",
-        "description": "Read text files and PDFs from S3",
-    },
     "pubmed": {
         "name": "PubMed Search",
         "tool": "pubmed_search",
@@ -48,11 +45,12 @@ ALL_DATA_SOURCES = {
         "tool": "openfda_drug_search",
         "description": "Search FDA drug label database for pharmaceutical information",
     },
-    "bedrock_kb": {
-        "name": "Knowledge Base Search",
-        "tool": "knowledge_base_search",
-        "description": "Query Amazon Bedrock Knowledge Bases for approved claims and guidelines",
-        "requires_params": True,
+    "clinicaltrials": {
+        "name": "ClinicalTrials.gov Search",
+        "tool": "clinicaltrials_search",
+        "description": (
+            "Search registered clinical studies by condition, intervention, or phase"
+        ),
     },
     "nova": {
         "name": "Nova Web Grounding",
@@ -96,7 +94,9 @@ def load_system_prompt(
         enabled_sources = DEFAULT_ENABLED_SOURCES
 
     tools_section = "### Data Retrieval (via Gateway)\n"
-    tools_section += "The following Gateway tools are available (names start with `gateway___`):\n"
+    tools_section += (
+        "The following Gateway tools are available (names start with `gateway___`):\n"
+    )
     for source_key in enabled_sources:
         if source_key in DATA_SOURCES:
             source = DATA_SOURCES[source_key]
@@ -116,7 +116,9 @@ def load_system_prompt(
                 tools_section += f"- `{uri}`\n"
         if claims_uris:
             tools_section += "\n### Approved Claims (S3)\n"
-            tools_section += "Read these to check statements against pre-approved claims:\n"
+            tools_section += (
+                "Read these to check statements against pre-approved claims:\n"
+            )
             for uri in claims_uris:
                 tools_section += f"- `{uri}`\n"
 
@@ -166,7 +168,9 @@ def create_medical_review_agent(
     reference_uris: list[str] | None = None,
     claims_uris: list[str] | None = None,
 ) -> tuple:
-    system_prompt = load_system_prompt(enabled_sources, content_pdf_uri, reference_uris, claims_uris)
+    system_prompt = load_system_prompt(
+        enabled_sources, content_pdf_uri, reference_uris, claims_uris
+    )
 
     model_id = os.environ.get(
         "MODEL_ID", "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
@@ -270,7 +274,10 @@ async def agent_stream(payload, context: RequestContext):
     claims_uris = payload.get("claimsUris", [])
 
     if not all([user_query, session_id]):
-        yield {"status": "error", "error": "Missing required fields: prompt or runtimeSessionId"}
+        yield {
+            "status": "error",
+            "error": "Missing required fields: prompt or runtimeSessionId",
+        }
         return
 
     # Build the full prompt with PDF context
@@ -286,13 +293,24 @@ async def agent_stream(payload, context: RequestContext):
         user_id = extract_user_id_from_context(context)
 
         agent, review_hook = create_medical_review_agent(
-            user_id, session_id, enabled_sources,
-            content_pdf_uri, reference_uris or None, claims_uris or None,
+            user_id,
+            session_id,
+            enabled_sources,
+            content_pdf_uri,
+            reference_uris or None,
+            claims_uris or None,
         )
 
         _keep_keys = {
-            "data", "delta", "current_tool_use", "message", "result",
-            "init_event_loop", "start_event_loop", "start", "type",
+            "data",
+            "delta",
+            "current_tool_use",
+            "message",
+            "result",
+            "init_event_loop",
+            "start_event_loop",
+            "start",
+            "type",
         }
         stream = agent.stream_async(full_prompt, session_id=session_id)
         async for event in stream:
