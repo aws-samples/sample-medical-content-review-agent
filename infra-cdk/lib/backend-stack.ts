@@ -344,21 +344,39 @@ export class BackendStack extends cdk.NestedStack {
       TOOLS_CONFIG: JSON.stringify(config.tools || {}), // Tool enabled/default_on config
     }
 
-    // Grant S3 write permissions for report upload
-    agentRole.addToPrincipalPolicy(
-      new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-        resources: [`arn:aws:s3:::${this.stagingBucketName}/reports/*`],
-      })
-    )
-
-    // Grant S3 read permissions for user-uploaded content (PDFs, references)
+    // Grant S3 read/write for orchestrator + reviewer workflow:
+    //   - uploads/*   read  (user-uploaded PDFs)
+    //   - markdowns/* read+write  (process_pdf + batch_content outputs)
+    //   - reviews/*   read+write  (per-batch reviewer JSONs, aggregated review, review_results.json)
+    //   - reports/*   read+write  (retained from earlier report-upload flow)
     agentRole.addToPrincipalPolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
         actions: ["s3:GetObject"],
         resources: [`arn:aws:s3:::${this.stagingBucketName}/uploads/*`],
+      })
+    )
+    agentRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+        resources: [
+          `arn:aws:s3:::${this.stagingBucketName}/markdowns/*`,
+          `arn:aws:s3:::${this.stagingBucketName}/reviews/*`,
+          `arn:aws:s3:::${this.stagingBucketName}/reports/*`,
+        ],
+      })
+    )
+    agentRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ["s3:ListBucket"],
+        resources: [`arn:aws:s3:::${this.stagingBucketName}`],
+        conditions: {
+          StringLike: {
+            "s3:prefix": ["reviews/*", "markdowns/*"],
+          },
+        },
       })
     )
 
