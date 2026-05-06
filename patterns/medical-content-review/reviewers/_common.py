@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 import boto3
 from strands import Agent
@@ -22,6 +22,14 @@ from strands.models import BedrockModel, CacheConfig
 from utils.inference import get_bedrock_config, get_inference_configs
 
 s3_client = boto3.client("s3")
+
+PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
+
+
+def load_prompt(name: str) -> str:
+    """Read a reviewer prompt template from patterns/medical-content-review/prompts/."""
+    return (PROMPTS_DIR / f"{name}.txt").read_text()
+
 
 INFERENCE_CONFIG, _ = get_inference_configs()
 BEDROCK_CONFIG = get_bedrock_config()
@@ -88,7 +96,7 @@ FINDINGS_SCHEMA_HINT = """Each finding object must have these fields:
 - `fix`: str, concrete suggested correction
 - `reference`: str, supporting reference or quote (empty string if none)
 - `source`: str, the source document or database the reference came from ("" if none)
-- `type`: str, "mandatory" (incorrect info / adherence risk) or "optional" (clarity/quality)
+- `type`: str, "mandatory" (incorrect info / adherence) or "optional" (clarity)
 - `score`: int, severity 1-100 (>=70 for mandatory, <50 for optional)"""
 
 

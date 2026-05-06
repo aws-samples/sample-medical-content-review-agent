@@ -8,32 +8,13 @@ from utils.gateway import create_gateway_mcp_client
 from reviewers._common import (
     FINDINGS_SCHEMA_HINT,
     batch_stem,
+    load_prompt,
     read_s3_text,
     run_inner_agent,
     write_review_json,
 )
 
-SYSTEM_PROMPT_TEMPLATE = """You are an external-evidence medical reviewer. Given a single batch of
-document markdown (with `[page N]` tags), verify factual medical claims (drug names, indications,
-dosages, trial results, efficacy numbers, safety signals) against the external databases available
-as Gateway tools.
-
-Available Gateway tools (names start with `gateway___`):
-{tools_section}
-
-Rules:
-- For each claim worth checking, call the most relevant tool(s). Fan out multiple tool calls in
-  a single turn when you have independent claims.
-- Treat a 404 / "no results" response as "unverified", not as an error.
-- Flag a claim if external evidence contradicts it, names a drug/trial/study that does not
-  exist in the databases, or has numbers (dosage, sample size, efficacy %) that don't match.
-- Do NOT flag claims that external evidence supports, nor claims that simply can't be verified
-  (absence of evidence is not evidence of error).
-
-Output exactly one JSON array of finding objects wrapped in <findings></findings> tags.
-{schema}
-
-If no external issues found, output `<findings>[]</findings>`."""
+SYSTEM_PROMPT_TEMPLATE = load_prompt("external_reviewer")
 
 
 def _tools_section(enabled_sources: list[str]) -> str:
@@ -45,7 +26,10 @@ def _tools_section(enabled_sources: list[str]) -> str:
     }
     lines = [f"- {labels[s]}" for s in enabled_sources if s in labels]
     if not lines:
-        return "- (no external tools enabled — skip the review and output <findings>[]</findings>)"
+        return (
+            "- (no external tools enabled — skip the review and output"
+            " <findings>[]</findings>)"
+        )
     return "\n".join(lines)
 
 

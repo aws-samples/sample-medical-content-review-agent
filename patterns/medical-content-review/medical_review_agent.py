@@ -32,7 +32,7 @@ BEDROCK_CONFIG = get_bedrock_config()
 
 app = BedrockAgentCoreApp()
 
-SYSTEM_PROMPT_PATH = Path(__file__).parent / "system_prompt.txt"
+SYSTEM_PROMPT_PATH = Path(__file__).parent / "prompts" / "orchestrator.txt"
 
 # External data sources reachable via the AgentCore Gateway. The orchestrator
 # itself does NOT call these — only the external-review sub-agent does. This
