@@ -41,7 +41,6 @@ export class AgentCoreClient {
     enabledSources?: string[],
     contentPdfUri?: string,
     referenceUris?: string[],
-    claimsUris?: string[],
   ): Promise<void> {
     if (!accessToken) throw new Error("No valid access token found.");
     if (!this.runtimeArn) throw new Error("Agent Runtime ARN not configured.");
@@ -74,10 +73,6 @@ export class AgentCoreClient {
 
     if (referenceUris && referenceUris.length > 0) {
       payload.referenceUris = referenceUris;
-    }
-
-    if (claimsUris && claimsUris.length > 0) {
-      payload.claimsUris = claimsUris;
     }
 
     // User identity is extracted server-side from the validated JWT token

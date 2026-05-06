@@ -44,11 +44,11 @@ interface ReviewResultsPanelProps {
 }
 
 const PHASES: { icon: string; text: string }[] = [
-  { icon: "📄", text: "Processing PDF" },
+  { icon: "📄", text: "Reading documents" },
   { icon: "✂️", text: "Splitting into batches" },
-  { icon: "📝", text: "Extracting statements" },
-  { icon: "🔍", text: "Verifying against sources" },
-  { icon: "✅", text: "Generating report" },
+  { icon: "🔍", text: "Running reviewers in parallel" },
+  { icon: "🧩", text: "Merging reviewer findings" },
+  { icon: "✅", text: "Writing final report" },
 ];
 
 function formatElapsed(ms: number): string {
