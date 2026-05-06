@@ -1,6 +1,6 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-"""External reviewer: cross-checks claims against PubMed, OpenFDA, ClinicalTrials, web."""
+"""External reviewer: cross-checks claims against PubMed, OpenFDA, trials, web."""
 
 from strands import tool
 from utils.gateway import create_gateway_mcp_client
@@ -21,7 +21,9 @@ def _tools_section(enabled_sources: list[str]) -> str:
     labels = {
         "pubmed": "gateway___pubmed_search — peer-reviewed biomedical literature",
         "openfda": "gateway___openfda_drug_search — FDA drug label database",
-        "clinicaltrials": "gateway___clinicaltrials_search — registered clinical studies",
+        "clinicaltrials": (
+            "gateway___clinicaltrials_search — registered clinical studies"
+        ),
         "nova": "gateway___nova_web_search — grounded web search (use sparingly)",
     }
     lines = [f"- {labels[s]}" for s in enabled_sources if s in labels]
@@ -39,7 +41,7 @@ def run_external_review(
     session_id: str,
     enabled_sources: list[str],
 ) -> str:
-    """Run the external-evidence reviewer on a single batch markdown and save findings to S3.
+    """Run the external-evidence reviewer on one batch markdown and save to S3.
 
     Internally spins up a narrow sub-agent that has access to the Gateway
     tools in `enabled_sources` (e.g. PubMed, OpenFDA). The sub-agent cross-checks

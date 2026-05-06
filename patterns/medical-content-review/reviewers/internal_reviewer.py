@@ -26,7 +26,7 @@ def run_internal_review(
     session_id: str,
     reference_md_uris: list[str],
 ) -> str:
-    """Run the internal-reference reviewer on a single batch markdown and save findings to S3.
+    """Run the internal-reference reviewer on one batch markdown and save to S3.
 
     Internally spins up a narrow sub-agent with a single helper tool
     (`read_reference_markdown`) that lets it pull the text of any of the
