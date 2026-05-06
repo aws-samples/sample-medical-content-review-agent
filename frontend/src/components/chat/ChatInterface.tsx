@@ -53,16 +53,16 @@ function toolToPhaseIdx(name: string): number {
 const TOOL_META: Record<string, { label: string; icon: string }> = {
   process_pdf: { label: "Processing PDF", icon: "📄" },
   batch_content: { label: "Splitting into batches", icon: "✂️" },
-  run_generic_review: { label: "Generic reviewer", icon: "🧐" },
-  run_external_review: { label: "External reviewer", icon: "🔬" },
-  run_internal_review: { label: "Internal reviewer", icon: "📚" },
+  run_generic_review: { label: "Editorial", icon: "🧐" },
+  run_external_review: { label: "External Evidence", icon: "🔬" },
+  run_internal_review: { label: "Internal References", icon: "📚" },
   get_reviews: { label: "Merging reviews", icon: "🧩" },
   file_read: { label: "Reading file", icon: "📂" },
   file_write: { label: "Writing a review report", icon: "✅" },
   pubmed_search: { label: "Searching PubMed", icon: "🔬" },
   openfda_drug_search: { label: "Searching OpenFDA", icon: "💊" },
   clinicaltrials_search: { label: "Searching ClinicalTrials.gov", icon: "🏥" },
-  nova_web_search: { label: "Web search", icon: "🌐" },
+  nova_web_search: { label: "Nova Web Search", icon: "🌐" },
   read_reference_markdown: { label: "Reading reference", icon: "📎" },
 };
 
@@ -226,11 +226,26 @@ const FALLBACK_TOOLS: Record<string, ToolConfig> = {
   nova: { enabled: true, default_on: true },
 };
 
+// Produce a human-sortable session id, e.g.
+//   2026-05-06_14-12-34_a3f4e2b19c8d4a6b90f172ec35dea811
+// AgentCore requires runtimeSessionId length >= 33, so we pad with a full
+// UUID (32 hex chars) after the timestamp. The timestamp keeps S3 folders
+// sortable in the console; the UUID guarantees uniqueness.
+function newSessionId(): string {
+  const d = new Date();
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  const ts =
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
+  const suffix = crypto.randomUUID().replace(/-/g, "");
+  return `${ts}_${suffix}`;
+}
+
 export default function ChatInterface() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [client, setClient] = useState<AgentCoreClient | null>(null);
-  const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
+  const [sessionId, setSessionId] = useState(() => newSessionId());
 
   const [toolsConfig, setToolsConfig] =
     useState<Record<string, ToolConfig>>(FALLBACK_TOOLS);
@@ -339,6 +354,9 @@ export default function ChatInterface() {
     userMessage: string,
     overrideContentUri?: string,
     overrideReferenceUris?: string[],
+    contentPdfName?: string,
+    referenceNames?: string[],
+    overrideSessionId?: string,
   ) => {
     if (!userMessage.trim() || !client) return;
     setError(null);
@@ -400,7 +418,7 @@ export default function ChatInterface() {
 
       await client.invoke(
         userMessage,
-        sessionId,
+        overrideSessionId ?? sessionId,
         accessToken,
         (event) => {
           switch (event.type) {
@@ -565,6 +583,10 @@ export default function ChatInterface() {
         enabledSourceIds,
         contentPdfUri?.startsWith("s3://") ? contentPdfUri : undefined,
         referenceUris?.length ? referenceUris : undefined,
+        contentPdfName || undefined,
+        referenceNames && referenceNames.length > 0
+          ? referenceNames
+          : undefined,
       );
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
@@ -599,6 +621,11 @@ export default function ChatInterface() {
       return;
     }
 
+    // Stamp the session id with the moment the review actually starts, so the
+    // S3 folder name reflects "now" rather than page-load time.
+    const freshSessionId = newSessionId();
+    setSessionId(freshSessionId);
+
     let contentUri: string | undefined;
     let refUris: string[] = [];
 
@@ -623,13 +650,22 @@ export default function ChatInterface() {
 
     const prompt =
       "Please review the attached medical content document for adherence issues. Analyze all pages, cross-check claims against references, and produce a detailed review report.";
+    const contentName = documentFile.name;
+    const refNames = referenceFiles.map((f) => f.name);
     setShowReviewPanel(true);
-    sendMessage(prompt, contentUri, refUris.length > 0 ? refUris : undefined);
+    sendMessage(
+      prompt,
+      contentUri,
+      refUris.length > 0 ? refUris : undefined,
+      contentName,
+      refNames.length > 0 ? refNames : undefined,
+      freshSessionId,
+    );
   };
 
   const startNewChat = () => {
     client?.abort();
-    setSessionId(crypto.randomUUID());
+    setSessionId(newSessionId());
     setMessages([]);
     setError(null);
     setIsLoading(false);

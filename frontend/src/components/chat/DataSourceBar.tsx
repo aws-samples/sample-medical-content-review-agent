@@ -36,7 +36,7 @@ const TOOLS: ToolMeta[] = [
   },
   {
     id: "nova",
-    name: "Web search",
+    name: "Nova Web Search",
     icon: "🌐",
     description: "Grounded web search via Amazon Nova",
   },
