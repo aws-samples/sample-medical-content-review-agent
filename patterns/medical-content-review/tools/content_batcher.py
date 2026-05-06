@@ -1,12 +1,12 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-"""Content batcher: splits a markdown document into logical per-batch markdown files on S3."""
+"""Content batcher: splits a markdown document into per-batch markdown files on S3."""
 
 import ast
 import json
 import os
 import re
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 import boto3
 from strands import tool
@@ -21,22 +21,14 @@ MODEL_ID = os.environ.get(
 STAGING_BUCKET = os.environ.get("STAGING_BUCKET_NAME")
 MARKDOWN_PREFIX = "markdowns"
 
-SYSTEM = """You split a medical/promotional document into logical review batches.
+SYSTEM = (Path(__file__).parent.parent / "prompts" / "batch_content.txt").read_text()
 
-Each batch should group a content page with any pages that provide direct support for it —
-its footnote page, reference list, supporting figures, or continuation of the same section.
-A batch is a coherent unit a reviewer can read end-to-end without cross-referencing other parts.
-
-Output ONLY a Python list of integer lists wrapped in <chunks></chunks> tags, no prose.
-Every page number must appear in exactly one batch, in ascending order.
-Example: <chunks>[[1, 2], [3], [4, 5, 6]]</chunks>"""
-
-PROMPT_TEMPLATE = """Here is the full document as markdown. Pages are delimited by `[page N]` / `[/page N]` tags.
-
-Group the pages into logical review batches as specified.
-
-Document:
-{markdown}"""
+PROMPT_TEMPLATE = (
+    "Here is the full document as markdown. Pages are delimited by"
+    " `[page N]` / `[/page N]` tags.\n\n"
+    "Group the pages into logical review batches as specified.\n\n"
+    "Document:\n{markdown}"
+)
 
 PAGE_PATTERN = re.compile(r"\[page (\d+)\]\n(.*?)\n\[/page \1\]", re.DOTALL)
 
@@ -61,7 +53,7 @@ def _load_pages(markdown: str) -> dict[int, str]:
 
 @tool
 def batch_content(markdown_s3_uri: str) -> str:
-    """Split a markdown document into logical review batches and upload each as its own markdown file.
+    """Split a markdown document into batches and upload each as its own file.
 
     The input must be an S3 URI produced by `process_pdf`. The tool asks the model
     to group pages into coherent review units (content + supporting reference

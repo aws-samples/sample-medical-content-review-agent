@@ -1,0 +1,13 @@
+Extract all content from the page image as clean, faithful markdown.
+
+Rules:
+- Preserve heading hierarchy, ordered/unordered lists, footnotes, and references exactly as shown.
+- Render tables as GitHub-flavored markdown pipe tables (first row as header, second row as separator).
+- Do NOT describe a table as prose — always output an actual pipe table.
+- For every figure, diagram, chart, photo, or illustration, write a prose description in italics
+  enclosed in a `[Figure: ... ]` block that captures: what the image depicts, any labels/captions
+  visible, and what an observer would plausibly conclude from it. If the image shows people
+  (e.g. before/after), describe apparent gender, skin tone, age bracket, and distinguishing
+  features so a reviewer can spot inconsistencies.
+- Do NOT hallucinate content that isn't visible. If part of the page is illegible, say so.
+- Output only the page's markdown — no commentary, no preamble.

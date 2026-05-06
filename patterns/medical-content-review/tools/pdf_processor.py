@@ -3,11 +3,11 @@
 """PDF processor: converts PDF pages to markdown via multimodal OCR and stores on S3."""
 
 import os
+import re
 import tempfile
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 import boto3
 from pdf2image import convert_from_path, pdfinfo_from_path
@@ -25,19 +25,7 @@ OCR_MODEL_ID = os.environ.get(
 STAGING_BUCKET = os.environ.get("STAGING_BUCKET_NAME")
 MARKDOWN_PREFIX = "markdowns"
 
-OCR_SYSTEM = """Extract all content from the page image as clean, faithful markdown.
-
-Rules:
-- Preserve heading hierarchy, ordered/unordered lists, footnotes, and references exactly as shown.
-- Render tables as GitHub-flavored markdown pipe tables (first row as header, second row as separator).
-- Do NOT describe a table as prose — always output an actual pipe table.
-- For every figure, diagram, chart, photo, or illustration, write a prose description in italics
-  enclosed in a `[Figure: ... ]` block that captures: what the image depicts, any labels/captions
-  visible, and what an observer would plausibly conclude from it. If the image shows people
-  (e.g. before/after), describe apparent gender, skin tone, age bracket, and distinguishing
-  features so a reviewer can spot inconsistencies.
-- Do NOT hallucinate content that isn't visible. If part of the page is illegible, say so.
-- Output only the page's markdown — no commentary, no preamble."""
+OCR_SYSTEM = (Path(__file__).parent.parent / "prompts" / "pdf_ocr.txt").read_text()
 
 
 def _parse_s3_uri(s3_uri: str) -> tuple[str, str]:
@@ -48,6 +36,14 @@ def _parse_s3_uri(s3_uri: str) -> tuple[str, str]:
 
 def _stem_from_s3_key(key: str) -> str:
     return PurePosixPath(key).stem
+
+
+def _sanitise_stem(name: str) -> str:
+    """Turn an arbitrary filename into an S3-key-safe stem."""
+    stem = PurePosixPath(name).stem.strip()
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem)
+    stem = stem.strip("._-")
+    return stem or "document"
 
 
 def _ocr_single_page(pdf_path: str, page_idx: int, dpi: int) -> tuple[int, str]:
@@ -86,7 +82,7 @@ def _ocr_single_page(pdf_path: str, page_idx: int, dpi: int) -> tuple[int, str]:
 
 
 @tool
-def process_pdf(s3_uri: str, dpi: int = 200) -> str:
+def process_pdf(s3_uri: str, original_filename: str = "", dpi: int = 200) -> str:
     """Convert a PDF from S3 into a single markdown file and upload it to S3.
 
     Pages are OCR'd in parallel (5 at a time) via multimodal LLM calls. The result
@@ -98,6 +94,10 @@ def process_pdf(s3_uri: str, dpi: int = 200) -> str:
     ----------
     s3_uri : str
         S3 URI of the input PDF, e.g. `s3://bucket/path/document.pdf`.
+    original_filename : str
+        Human-readable filename the user uploaded (e.g. "dossier.pdf"). Used to
+        name the output markdown. If empty or missing, falls back to the S3 key's
+        stem.
     dpi : int
         Resolution at which pages are rasterized before OCR. Defaults to 200.
 
@@ -111,6 +111,11 @@ def process_pdf(s3_uri: str, dpi: int = 200) -> str:
         raise RuntimeError("STAGING_BUCKET_NAME environment variable is not set")
 
     bucket, key = _parse_s3_uri(s3_uri)
+    stem = (
+        _sanitise_stem(original_filename)
+        if original_filename
+        else _stem_from_s3_key(key)
+    )
 
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=True) as tmp:
         s3_client.download_file(bucket, key, tmp.name)
@@ -128,11 +133,9 @@ def process_pdf(s3_uri: str, dpi: int = 200) -> str:
                 results[page_idx] = text
 
     parts = [f"[page {p}]\n{results[p]}\n[/page {p}]" for p in sorted(results)]
-    document_markdown = f"# Markdown of {_stem_from_s3_key(key)}\n\n" + "\n\n".join(
-        parts
-    )
+    document_markdown = f"# Markdown of {stem}\n\n" + "\n\n".join(parts)
 
-    out_key = f"{MARKDOWN_PREFIX}/{_stem_from_s3_key(key)}_{uuid.uuid4().hex[:8]}.md"
+    out_key = f"{MARKDOWN_PREFIX}/{stem}.md"
     s3_client.put_object(
         Bucket=STAGING_BUCKET,
         Key=out_key,
