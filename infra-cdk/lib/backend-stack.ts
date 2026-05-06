@@ -15,7 +15,11 @@ import { PythonFunction } from "@aws-cdk/aws-lambda-python-alpha"
 import * as lambda from "aws-cdk-lib/aws-lambda"
 import * as ecr_assets from "aws-cdk-lib/aws-ecr-assets"
 import * as cr from "aws-cdk-lib/custom-resources"
-import { Construct } from "constructs"
+import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch"
+import * as cw_actions from "aws-cdk-lib/aws-cloudwatch-actions"
+import * as sns from "aws-cdk-lib/aws-sns"
+import * as wafv2 from "aws-cdk-lib/aws-wafv2"
+import { Construct, IConstruct } from "constructs"
 import { AppConfig } from "./utils/config-manager"
 import { AgentCoreRole } from "./utils/agentcore-role"
 import * as path from "path"
@@ -44,6 +48,7 @@ export class BackendStack extends cdk.NestedStack {
   private agentRuntime: agentcore.Runtime
   private stagingBucketName: string
   private stagingBucket: s3.Bucket
+  private alarmTopic: sns.Topic
 
   constructor(scope: Construct, id: string, props: BackendStackProps) {
     super(scope, id, props)
@@ -54,6 +59,30 @@ export class BackendStack extends cdk.NestedStack {
     this.userPoolDomain = props.userPoolDomain
     this.stagingBucketName = props.stagingBucket.bucketName
     this.stagingBucket = props.stagingBucket
+
+    // Single SNS topic used by all Lambda CloudWatch alarms in this stack.
+    // No subscription configured; add an email subscription when needed.
+    this.alarmTopic = new sns.Topic(this, "LambdaAlarmTopic", {
+      displayName: `${props.config.stack_name_base}-lambda-alarms`,
+    })
+
+    // Ensure X-Ray active tracing on every Lambda in this stack, including
+    // CDK-generated singleton functions (e.g. s3 autoDeleteObjects handler,
+    // cr.Provider framework Lambdas) that cannot be referenced directly.
+    // Matches by synthesized CFN type so it catches both lambda.CfnFunction and
+    // CustomResourceProvider-generated Lambdas.
+    const stackSelf = this
+    cdk.Aspects.of(this).add({
+      visit(node: IConstruct) {
+        if (
+          cdk.CfnResource.isCfnResource(node) &&
+          node.cfnResourceType === "AWS::Lambda::Function"
+        ) {
+          node.addPropertyOverride("TracingConfig", { Mode: "Active" })
+          stackSelf.ensureCfnLambdaErrorsAlarm(node)
+        }
+      },
+    })
 
     // Import the Cognito resources from the other stack
     this.userPool = cognito.UserPool.fromUserPoolId(
@@ -147,6 +176,7 @@ export class BackendStack extends cdk.NestedStack {
         timeout: cdk.Duration.minutes(10),
         memorySize: 1024,
         ephemeralStorageSize: cdk.Size.gibibytes(2),
+        tracing: lambda.Tracing.ACTIVE,
       })
 
       agentCodeBucket.grantReadWrite(packagerLambda)
@@ -494,6 +524,7 @@ export class BackendStack extends cdk.NestedStack {
     const feedbackLambda = new PythonFunction(this, "FeedbackLambda", {
       functionName: `${config.stack_name_base}-feedback`,
       runtime: lambda.Runtime.PYTHON_3_13,
+      tracing: lambda.Tracing.ACTIVE,
       entry: path.join(__dirname, "..", "lambdas", "feedback"),
       handler: "handler",
       environment: {
@@ -520,6 +551,8 @@ export class BackendStack extends cdk.NestedStack {
     // Grant Lambda permissions to write to DynamoDB
     feedbackTable.grantWriteData(feedbackLambda)
 
+    this.addLambdaAlarms(feedbackLambda, "Feedback")
+
     /*
      * CORS TODO: Wildcard (*) used because Backend deploys before Frontend in nested stack order.
      * For Lambda proxy integrations, the Lambda's ALLOWED_ORIGINS env var is the primary CORS control.
@@ -536,15 +569,24 @@ export class BackendStack extends cdk.NestedStack {
       },
       deployOptions: {
         stageName: "prod",
-        throttlingRateLimit: 100,
-        throttlingBurstLimit: 200,
-        cachingEnabled: true,
         cacheClusterEnabled: true,
         cacheClusterSize: "0.5",
-        cacheTtl: cdk.Duration.minutes(5),
-        loggingLevel: apigateway.MethodLoggingLevel.INFO,
-        dataTraceEnabled: true,
-        metricsEnabled: true,
+        // All method-level settings (cache, logging, metrics, throttling) go
+        // through methodOptions so CFN emits a single MethodSettings entry per
+        // resource path. Scanners flag stages where the first MethodSettings
+        // entry is missing any one of these controls.
+        methodOptions: {
+          "/*/*": {
+            cachingEnabled: true,
+            cacheTtl: cdk.Duration.minutes(5),
+            cacheDataEncrypted: true,
+            loggingLevel: apigateway.MethodLoggingLevel.INFO,
+            dataTraceEnabled: true,
+            metricsEnabled: true,
+            throttlingRateLimit: 100,
+            throttlingBurstLimit: 200,
+          },
+        },
         accessLogDestination: new apigateway.LogGroupLogDestination(
           new logs.LogGroup(this, "FeedbackApiAccessLogGroup", {
             logGroupName: `/aws/apigateway/${config.stack_name_base}-api-access`,
@@ -584,6 +626,7 @@ export class BackendStack extends cdk.NestedStack {
     const uploadLambda = new PythonFunction(this, "UploadLambda", {
       functionName: `${config.stack_name_base}-upload`,
       runtime: lambda.Runtime.PYTHON_3_13,
+      tracing: lambda.Tracing.ACTIVE,
       entry: path.join(__dirname, "..", "lambdas", "upload"),
       handler: "handler",
       environment: {
@@ -610,11 +653,14 @@ export class BackendStack extends cdk.NestedStack {
     // Grant upload Lambda permission to put objects in staging bucket
     this.stagingBucket.grantPut(uploadLambda)
 
+    this.addLambdaAlarms(uploadLambda, "Upload")
+
     // Create /upload resource and POST method
     const uploadResource = api.root.addResource("upload")
     uploadResource.addMethod("POST", new apigateway.LambdaIntegration(uploadLambda), {
       authorizer,
       authorizationType: apigateway.AuthorizationType.COGNITO,
+      requestValidator: requestValidator,
     })
 
     // Store the API URL for access from main stack
@@ -626,6 +672,65 @@ export class BackendStack extends cdk.NestedStack {
       stringValue: api.url,
       description: "Feedback API Gateway URL",
     })
+
+    // Attach AWS-managed common rule set via WAFv2 to the prod stage.
+    const webAcl = new wafv2.CfnWebACL(this, "FeedbackApiWebAcl", {
+      name: `${config.stack_name_base}-feedback-api-waf`,
+      scope: "REGIONAL",
+      defaultAction: { allow: {} },
+      visibilityConfig: {
+        cloudWatchMetricsEnabled: true,
+        metricName: `${config.stack_name_base}-feedback-api-waf`,
+        sampledRequestsEnabled: true,
+      },
+      rules: [
+        {
+          name: "AWS-AWSManagedRulesCommonRuleSet",
+          priority: 0,
+          overrideAction: { none: {} },
+          statement: {
+            managedRuleGroupStatement: {
+              vendorName: "AWS",
+              name: "AWSManagedRulesCommonRuleSet",
+            },
+          },
+          visibilityConfig: {
+            cloudWatchMetricsEnabled: true,
+            metricName: "AWSManagedRulesCommonRuleSet",
+            sampledRequestsEnabled: true,
+          },
+        },
+        {
+          // Includes the Log4j/Log4Shell (CVE-2021-44228) rule among other
+          // known-bad input patterns.
+          name: "AWS-AWSManagedRulesKnownBadInputsRuleSet",
+          priority: 1,
+          overrideAction: { none: {} },
+          statement: {
+            managedRuleGroupStatement: {
+              vendorName: "AWS",
+              name: "AWSManagedRulesKnownBadInputsRuleSet",
+            },
+          },
+          visibilityConfig: {
+            cloudWatchMetricsEnabled: true,
+            metricName: "AWSManagedRulesKnownBadInputsRuleSet",
+            sampledRequestsEnabled: true,
+          },
+        },
+      ],
+    })
+
+    const stageArn = cdk.Stack.of(this).formatArn({
+      service: "apigateway",
+      account: "",
+      resource: `/restapis/${api.restApiId}/stages/${api.deploymentStage.stageName}`,
+    })
+
+    new wafv2.CfnWebACLAssociation(this, "FeedbackApiWebAclAssociation", {
+      resourceArn: stageArn,
+      webAclArn: webAcl.attrArn,
+    })
   }
 
   private createAgentCoreGateway(config: AppConfig): void {
@@ -635,12 +740,15 @@ export class BackendStack extends cdk.NestedStack {
       handler: "sample_tool_lambda.handler",
       code: lambda.Code.fromAsset(path.join(__dirname, "../../gateway/tools/sample_tool")),
       timeout: cdk.Duration.seconds(30),
+      tracing: lambda.Tracing.ACTIVE,
       logGroup: new logs.LogGroup(this, "SampleToolLambdaLogGroup", {
         logGroupName: `/aws/lambda/${config.stack_name_base}-sample-tool`,
         retention: logs.RetentionDays.ONE_WEEK,
         removalPolicy: cdk.RemovalPolicy.DESTROY,
       }),
     })
+
+    this.addLambdaAlarms(toolLambda, "SampleTool")
 
     // ========== ADR RESEARCH TOOLS ==========
 
@@ -785,6 +893,7 @@ export class BackendStack extends cdk.NestedStack {
       s3ReaderLambda = new lambda.Function(this, "S3BdaReaderLambda", {
         runtime: lambda.Runtime.PYTHON_3_13,
         handler: "s3_reader_lambda.handler",
+        tracing: lambda.Tracing.ACTIVE,
         code: lambda.Code.fromAsset(path.join(__dirname, "../../gateway/tools/s3_reader"), {
           bundling: {
             image: lambda.Runtime.PYTHON_3_13.bundlingImage,
@@ -816,6 +925,8 @@ export class BackendStack extends cdk.NestedStack {
           resources: ["*"], // Scoped to specific buckets in production
         })
       )
+
+      this.addLambdaAlarms(s3ReaderLambda, "S3BdaReader")
     }
 
     // Nova Web Search Lambda
@@ -848,6 +959,8 @@ export class BackendStack extends cdk.NestedStack {
           ],
         })
       )
+
+      this.addLambdaAlarms(novaSearchLambda, "NovaSearch")
     }
 
     // OpenFDA Drug Search Lambda
@@ -866,6 +979,8 @@ export class BackendStack extends cdk.NestedStack {
           removalPolicy: cdk.RemovalPolicy.DESTROY,
         }),
       })
+
+      this.addLambdaAlarms(openfdaLambda, "OpenFDASearch")
     }
 
     // PubMed Search Lambda
@@ -884,6 +999,8 @@ export class BackendStack extends cdk.NestedStack {
           removalPolicy: cdk.RemovalPolicy.DESTROY,
         }),
       })
+
+      this.addLambdaAlarms(pubmedLambda, "PubMedSearch")
     }
 
     // ClinicalTrials.gov Search Lambda
@@ -905,6 +1022,8 @@ export class BackendStack extends cdk.NestedStack {
           removalPolicy: cdk.RemovalPolicy.DESTROY,
         }),
       })
+
+      this.addLambdaAlarms(clinicaltrialsLambda, "ClinicalTrialsSearch")
     }
 
     // FRED Economic Data Lambda
@@ -1347,6 +1466,96 @@ export class BackendStack extends cdk.NestedStack {
 
     // Machine client must be created after resource server
     this.machineClient.node.addDependency(resourceServer)
+  }
+
+  /**
+   * Track which Lambda construct paths already have alarms wired via
+   * addLambdaAlarms so the Aspect can skip them.
+   */
+  private alarmedLambdaPaths: Set<string> = new Set<string>()
+
+  /**
+   * Attach a minimal Errors alarm to any Lambda CFN resource that doesn't
+   * already have one wired via addLambdaAlarms. Used from the Aspect to cover
+   * CDK-generated singleton Lambdas (custom-resource providers, s3
+   * autoDeleteObjects handlers) that scanners still expect to be monitored.
+   */
+  private ensureCfnLambdaErrorsAlarm(node: cdk.CfnResource): void {
+    // The CFN resource lives under the L2 Lambda construct's path; checking
+    // the parent path lets us skip anything already covered by addLambdaAlarms.
+    const parentPath = node.node.scope?.node.path
+    if (parentPath && this.alarmedLambdaPaths.has(parentPath)) {
+      return
+    }
+    const logicalId = cdk.Stack.of(node).resolve(node.logicalId) as string
+    const alarm = new cloudwatch.Alarm(this, `${logicalId}AutoErrorsAlarm`, {
+      metric: new cloudwatch.Metric({
+        namespace: "AWS/Lambda",
+        metricName: "Errors",
+        // For AWS::Lambda::Function, Ref returns the function name.
+        dimensionsMap: { FunctionName: node.ref },
+        statistic: "Sum",
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    })
+    alarm.addAlarmAction(new cw_actions.SnsAction(this.alarmTopic))
+  }
+
+  /**
+   * Create standard CloudWatch alarms for a Lambda function. Publishes to the
+   * shared alarmTopic. Covers Errors, Throttles, Duration, Invocations,
+   * ConcurrentExecutions, and DeadLetterErrors.
+   */
+  private addLambdaAlarms(fn: lambda.IFunction, idPrefix: string): void {
+    this.alarmedLambdaPaths.add(fn.node.path)
+    const action = new cw_actions.SnsAction(this.alarmTopic)
+
+    const mk = (
+      id: string,
+      metric: cloudwatch.Metric,
+      threshold: number,
+      evaluationPeriods = 1
+    ): void => {
+      const alarm = new cloudwatch.Alarm(this, `${idPrefix}${id}Alarm`, {
+        metric,
+        threshold,
+        evaluationPeriods,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      })
+      alarm.addAlarmAction(action)
+    }
+
+    mk("Errors", fn.metricErrors({ period: cdk.Duration.minutes(5) }), 1)
+    mk("Throttles", fn.metricThrottles({ period: cdk.Duration.minutes(5) }), 1)
+    mk("Duration", fn.metricDuration({ period: cdk.Duration.minutes(5), statistic: "p95" }), 10_000)
+    mk("Invocations", fn.metricInvocations({ period: cdk.Duration.minutes(5) }), 10_000)
+    mk(
+      "ConcurrentExecutions",
+      new cloudwatch.Metric({
+        namespace: "AWS/Lambda",
+        metricName: "ConcurrentExecutions",
+        dimensionsMap: { FunctionName: fn.functionName },
+        statistic: "Maximum",
+        period: cdk.Duration.minutes(5),
+      }),
+      100
+    )
+    mk(
+      "DeadLetterErrors",
+      new cloudwatch.Metric({
+        namespace: "AWS/Lambda",
+        metricName: "DeadLetterErrors",
+        dimensionsMap: { FunctionName: fn.functionName },
+        statistic: "Sum",
+        period: cdk.Duration.minutes(5),
+      }),
+      1
+    )
   }
 
   /**
