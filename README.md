@@ -6,10 +6,11 @@ Medical Content Review is an AI-powered multi-agent system for reviewing medical
 
 **✨ Key features:**
 - **Drag-and-drop upload**: Upload medical content PDFs and reference materials directly from the browser
-- **Multi-agent review pipeline**: AI agents process PDFs, extract claims, and verify them against references
-- **Reference verification**: Cross-check claims against PubMed, OpenFDA, ClinicalTrials.gov, and uploaded reference documents
-- **Real-time results**: Split-pane UI shows review issues as they are found, with severity scoring
-- **Detailed issue reports**: Each issue includes the quoted text, severity score, recommended fix, and source reference
+- **Multi-agent pipeline**: An orchestrator fans out an Editorial, Internal References, and External Evidence reviewer per content batch in a single parallel turn
+- **External data sources**: Cross-check claims against PubMed, OpenFDA, ClinicalTrials.gov, and Nova web search — each toggleable from the UI
+- **Live progress dashboard**: Elapsed timer, event-driven phase checklist, and per-tool activity log with expandable raw output while the review runs
+- **Preview tabs**: Switch between the uploaded content PDF and its reference PDFs during and after the review
+- **Detailed issue report**: Each issue includes the quoted text, severity score, recommended fix, and source reference, sorted by page
 
 ## 🚀 Deployment
 
@@ -40,13 +41,16 @@ See the [deployment guide](docs/DEPLOYMENT.md) for detailed instructions.
 1. Open the application URL (from CDK outputs)
 2. Log in with Cognito credentials
 3. Upload a medical content PDF (drag-and-drop or click to select)
-4. Optionally upload reference materials
-5. Click **Start AI Review** and watch as the agent:
-   - Processes the PDF and splits content into batches
-   - Extracts medical claims and statements
-   - Verifies claims against reference materials and public databases
-   - Generates a detailed review report with severity scores
-6. Review detected issues in the results panel, download the report as JSON
+4. Optionally upload reference PDFs and toggle the external data sources (PubMed / OpenFDA / ClinicalTrials.gov / Nova)
+5. Click **Start AI Review** and watch as the orchestrator:
+   - OCRs every PDF to markdown in parallel (5 concurrent pages per PDF)
+   - Splits the content markdown into logical review batches
+   - Fans out three reviewer sub-agents per batch in a single turn:
+     - **Editorial** — spelling, grammar, exaggerated language, figure/image inconsistencies
+     - **Internal References** — cross-checks claims against uploaded reference markdowns
+     - **External Evidence** — cross-checks claims against enabled public databases (skipped when every external source is off)
+   - Aggregates every reviewer's findings and edits them into a de-duplicated, severity-scored final report
+6. Review detected issues in the results panel; click an issue to jump to its page; download the report as JSON
 
 
 ## ℹ️ Architecture
@@ -110,15 +114,17 @@ medical-content-review/
 │   ├── .config_example.yaml # Example deployment configuration (tracked)
 │   └── config.yaml         # Your deployment configuration (gitignored)
 ├── patterns/               # Agent pattern implementations
-│   └── medical-content-review/ # Medical review agent
-│       ├── medical_review_agent.py # Main agent with Gateway tools
-│       ├── review_upload_hook.py   # S3 upload for real-time display
-│       ├── system_prompt.txt       # Review workflow prompt
-│       ├── tools/                  # PDF processor, claim extractor, etc.
-│       ├── requirements.txt
-│       └── Dockerfile
-├── gateway/                # Gateway utilities and tool Lambda code
-│   └── tools/              # Gateway tool implementations (pubmed, openfda, clinicaltrials, s3, nova, kb, sample)
+│   ├── medical-content-review/ # Orchestrator + reviewer sub-agents
+│   │   ├── medical_review_agent.py # Orchestrator entrypoint
+│   │   ├── review_upload_hook.py   # S3 upload for real-time display
+│   │   ├── prompts/                # System prompts for every agent (orchestrator, editorial, internal, external) and OCR/batcher helpers
+│   │   ├── reviewers/              # Editorial / Internal / External reviewer sub-agents and the get_reviews aggregator
+│   │   ├── tools/                  # process_pdf (parallel OCR) and batch_content
+│   │   ├── requirements.txt
+│   │   └── Dockerfile
+│   └── utils/              # Shared helpers (auth, SSM, gateway MCP client)
+├── gateway/                # Gateway tool Lambda code
+│   └── tools/              # pubmed_search, openfda, clinicaltrials_search, nova_search, sample_tool
 ├── docker/                 # Local development Docker setup
 │   ├── docker-compose.yml
 │   └── Dockerfile.frontend.dev
