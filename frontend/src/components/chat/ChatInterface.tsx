@@ -11,6 +11,7 @@ import {
   ActivityEntry,
 } from "./ReviewResultsPanel";
 import { FileUploadCards } from "./FileUploadCards";
+import { DataSourceBar } from "./DataSourceBar";
 import { useGlobal } from "@/app/context/GlobalContext";
 import { AgentCoreClient } from "@/lib/agentcore-client";
 import type { AgentPattern } from "@/lib/agentcore-client";
@@ -28,25 +29,41 @@ function toolToPhaseIdx(name: string): number {
   const core = stripGatewayPrefix(name);
   if (core === "process_pdf") return 0;
   if (core === "batch_content") return 1;
-  if (core === "extract_claims") return 2;
+  if (
+    core === "run_generic_review" ||
+    core === "run_external_review" ||
+    core === "run_internal_review"
+  )
+    return 2;
+  if (core === "get_reviews") return 3;
   if (core === "file_write") return 4;
-  // Everything else — gateway searches, file_read — counts as verification
-  return 3;
+  // Gateway searches inside reviewer sub-agents still live in phase 2
+  if (
+    core === "pubmed_search" ||
+    core === "openfda_drug_search" ||
+    core === "clinicaltrials_search" ||
+    core === "nova_web_search" ||
+    core === "read_reference_markdown"
+  )
+    return 2;
+  return 2;
 }
 
 // Display metadata keyed by the bare tool name (after stripping any gateway prefix)
 const TOOL_META: Record<string, { label: string; icon: string }> = {
   process_pdf: { label: "Processing PDF", icon: "📄" },
   batch_content: { label: "Splitting into batches", icon: "✂️" },
-  extract_claims: { label: "Extracting claims", icon: "📝" },
+  run_generic_review: { label: "Editorial", icon: "🧐" },
+  run_external_review: { label: "External Evidence", icon: "🔬" },
+  run_internal_review: { label: "Internal References", icon: "📚" },
+  get_reviews: { label: "Merging reviews", icon: "🧩" },
   file_read: { label: "Reading file", icon: "📂" },
   file_write: { label: "Writing a review report", icon: "✅" },
   pubmed_search: { label: "Searching PubMed", icon: "🔬" },
   openfda_drug_search: { label: "Searching OpenFDA", icon: "💊" },
   clinicaltrials_search: { label: "Searching ClinicalTrials.gov", icon: "🏥" },
-  s3_text_reader: { label: "Reading reference document", icon: "📂" },
-  nova_web_search: { label: "Web search", icon: "🌐" },
-  knowledge_base_search: { label: "Knowledge base search", icon: "📚" },
+  nova_web_search: { label: "Nova Web Search", icon: "🌐" },
+  read_reference_markdown: { label: "Reading reference", icon: "📎" },
 };
 
 // Turn "some_tool_name" into "Some tool name"
@@ -79,13 +96,24 @@ function extractDetailFromInput(
     const parsed = JSON.parse(input);
     const core = stripGatewayPrefix(toolName);
     // File/S3 tools — surface the filename
-    const pathKeys = ["s3_uri", "s3_url", "uri", "path", "file_path", "key"];
+    const pathKeys = [
+      "s3_uri",
+      "s3_url",
+      "uri",
+      "path",
+      "file_path",
+      "key",
+      "markdown_s3_uri",
+      "batch_md_s3_uri",
+    ];
     if (
       [
         "process_pdf",
         "batch_content",
-        "extract_claims",
-        "s3_text_reader",
+        "run_generic_review",
+        "run_external_review",
+        "run_internal_review",
+        "read_reference_markdown",
         "file_read",
         "file_write",
       ].includes(core)
@@ -190,34 +218,40 @@ interface ToolConfig {
   default_on: boolean;
 }
 
-// Fallback defaults for medical content review
+// Fallback defaults for the external-source toggles (used until aws-exports.json loads)
 const FALLBACK_TOOLS: Record<string, ToolConfig> = {
-  pdf_processor: { enabled: true, default_on: true },
-  content_batcher: { enabled: true, default_on: true },
-  claim_extractor: { enabled: true, default_on: true },
   pubmed: { enabled: true, default_on: true },
   openfda: { enabled: true, default_on: true },
   clinicaltrials: { enabled: true, default_on: true },
-  s3: { enabled: true, default_on: true },
-  bedrock_kb: { enabled: false, default_on: false },
-  nova: { enabled: true, default_on: false },
+  nova: { enabled: true, default_on: true },
 };
+
+// Produce a human-sortable session id, e.g.
+//   2026-05-06_14-12-34_a3f4e2b19c8d4a6b90f172ec35dea811
+// AgentCore requires runtimeSessionId length >= 33, so we pad with a full
+// UUID (32 hex chars) after the timestamp. The timestamp keeps S3 folders
+// sortable in the console; the UUID guarantees uniqueness.
+function newSessionId(): string {
+  const d = new Date();
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  const ts =
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
+  const suffix = crypto.randomUUID().replace(/-/g, "");
+  return `${ts}_${suffix}`;
+}
 
 export default function ChatInterface() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [client, setClient] = useState<AgentCoreClient | null>(null);
-  const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
+  const [sessionId, setSessionId] = useState(() => newSessionId());
 
   const [toolsConfig, setToolsConfig] =
     useState<Record<string, ToolConfig>>(FALLBACK_TOOLS);
   const [enabledSources, setEnabledSources] = useState<Record<string, boolean>>(
     {},
   );
-  const [s3ContentPdfInput, setS3ContentPdfInput] = useState<string>("");
-  const [s3ReferenceInput, setS3ReferenceInput] = useState<string>("");
-  const [s3ClaimsInput, setS3ClaimsInput] = useState<string>("");
-
   // File upload state
   const [documentFile, setDocumentFile] = useState<File | null>(null);
   const [documentUrl, setDocumentUrl] = useState<string | null>(null);
@@ -320,6 +354,9 @@ export default function ChatInterface() {
     userMessage: string,
     overrideContentUri?: string,
     overrideReferenceUris?: string[],
+    contentPdfName?: string,
+    referenceNames?: string[],
+    overrideSessionId?: string,
   ) => {
     if (!userMessage.trim() || !client) return;
     setError(null);
@@ -373,30 +410,15 @@ export default function ChatInterface() {
       };
 
       const enabledSourceIds = getEnabledSourceIds();
-      const parseUris = (input: string) =>
-        input
-          .split("\n")
-          .map((u) => u.trim())
-          .filter((u) => u.startsWith("s3://"));
-
-      const contentPdfUri =
-        overrideContentUri ||
-        (enabledSources["s3"]
-          ? s3ContentPdfInput.trim() || undefined
-          : undefined);
+      const contentPdfUri = overrideContentUri;
       const referenceUris =
         overrideReferenceUris && overrideReferenceUris.length > 0
           ? overrideReferenceUris
-          : enabledSources["s3"]
-          ? parseUris(s3ReferenceInput)
           : undefined;
-      const claimsUris = enabledSources["s3"]
-        ? parseUris(s3ClaimsInput)
-        : undefined;
 
       await client.invoke(
         userMessage,
-        sessionId,
+        overrideSessionId ?? sessionId,
         accessToken,
         (event) => {
           switch (event.type) {
@@ -561,7 +583,10 @@ export default function ChatInterface() {
         enabledSourceIds,
         contentPdfUri?.startsWith("s3://") ? contentPdfUri : undefined,
         referenceUris?.length ? referenceUris : undefined,
-        claimsUris?.length ? claimsUris : undefined,
+        contentPdfName || undefined,
+        referenceNames && referenceNames.length > 0
+          ? referenceNames
+          : undefined,
       );
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
@@ -589,44 +614,58 @@ export default function ChatInterface() {
       return;
     }
 
-    let contentUri = s3ContentPdfInput.trim() || undefined;
-    let refUris: string[] = [];
-
-    // Upload files to S3 if provided
-    if (documentFile || referenceFiles.length > 0) {
-      setIsUploading(true);
-      try {
-        if (documentFile) {
-          contentUri = await uploadFileToS3(documentFile, idToken);
-          setS3ContentPdfInput(contentUri);
-        }
-        if (referenceFiles.length > 0) {
-          refUris = await Promise.all(
-            referenceFiles.map((f) => uploadFileToS3(f, idToken)),
-          );
-          setS3ReferenceInput(refUris.join("\n"));
-        }
-      } catch (err) {
-        setError(
-          `Upload failed: ${
-            err instanceof Error ? err.message : "Unknown error"
-          }`,
-        );
-        setIsUploading(false);
-        return;
-      }
-      setIsUploading(false);
+    if (!documentFile) {
+      setError(
+        "Please attach a medical content PDF before starting the review.",
+      );
+      return;
     }
 
+    // Stamp the session id with the moment the review actually starts, so the
+    // S3 folder name reflects "now" rather than page-load time.
+    const freshSessionId = newSessionId();
+    setSessionId(freshSessionId);
+
+    let contentUri: string | undefined;
+    let refUris: string[] = [];
+
+    setIsUploading(true);
+    try {
+      contentUri = await uploadFileToS3(documentFile, idToken);
+      if (referenceFiles.length > 0) {
+        refUris = await Promise.all(
+          referenceFiles.map((f) => uploadFileToS3(f, idToken)),
+        );
+      }
+    } catch (err) {
+      setError(
+        `Upload failed: ${
+          err instanceof Error ? err.message : "Unknown error"
+        }`,
+      );
+      setIsUploading(false);
+      return;
+    }
+    setIsUploading(false);
+
     const prompt =
-      "Please review the uploaded medical content document for adherence issues. Analyze all pages, check claims against references, and produce a detailed review report.";
+      "Please review the attached medical content document for adherence issues. Analyze all pages, cross-check claims against references, and produce a detailed review report.";
+    const contentName = documentFile.name;
+    const refNames = referenceFiles.map((f) => f.name);
     setShowReviewPanel(true);
-    sendMessage(prompt, contentUri, refUris.length > 0 ? refUris : undefined);
+    sendMessage(
+      prompt,
+      contentUri,
+      refUris.length > 0 ? refUris : undefined,
+      contentName,
+      refNames.length > 0 ? refNames : undefined,
+      freshSessionId,
+    );
   };
 
   const startNewChat = () => {
     client?.abort();
-    setSessionId(crypto.randomUUID());
+    setSessionId(newSessionId());
     setMessages([]);
     setError(null);
     setIsLoading(false);
@@ -643,9 +682,6 @@ export default function ChatInterface() {
       if (cfg.enabled) defaults[id] = cfg.default_on;
     }
     setEnabledSources(defaults);
-    setS3ContentPdfInput("");
-    setS3ReferenceInput("");
-    setS3ClaimsInput("");
     setDocumentFile(null);
     setDocumentUrl(null);
     setReferenceFiles([]);
@@ -754,36 +790,20 @@ export default function ChatInterface() {
               </details>
             )}
 
-            {/* S3 URI fallback inputs */}
-            <details className="bg-white/10 rounded-xl p-4">
-              <summary className="text-sm text-gray-300 cursor-pointer">
-                Or enter S3 URIs directly
-              </summary>
-              <div className="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-3">
-                <input
-                  type="text"
-                  placeholder="s3://bucket/path/to/content.pdf"
-                  value={s3ContentPdfInput}
-                  onChange={(e) => setS3ContentPdfInput(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-600 rounded-lg text-xs font-mono bg-gray-800 text-white placeholder:text-gray-500"
-                />
-                <textarea
-                  placeholder={"s3://bucket/path/to/reference.pdf"}
-                  value={s3ReferenceInput}
-                  onChange={(e) => setS3ReferenceInput(e.target.value)}
-                  rows={2}
-                  className="w-full px-3 py-2 border border-gray-600 rounded-lg text-xs font-mono bg-gray-800 text-white placeholder:text-gray-500"
-                />
-              </div>
-            </details>
+            {/* External data source toggles */}
+            <DataSourceBar
+              toolsConfig={toolsConfig}
+              enabledSources={enabledSources}
+              onToggle={(id) =>
+                setEnabledSources((prev) => ({ ...prev, [id]: !prev[id] }))
+              }
+            />
 
             {/* Start AI Review Button */}
             <div className="text-center py-4">
               <button
                 onClick={startReview}
-                disabled={
-                  (!documentFile && !s3ContentPdfInput.trim()) || isUploading
-                }
+                disabled={!documentFile || isUploading}
                 className="group relative inline-flex items-center gap-3 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 disabled:from-gray-400 disabled:to-gray-500 text-white font-bold py-5 px-12 rounded-xl text-lg shadow-xl transform transition-all hover:scale-105 disabled:hover:scale-100 disabled:cursor-not-allowed"
               >
                 <svg
@@ -820,7 +840,7 @@ export default function ChatInterface() {
                   />
                 </svg>
               </button>
-              {!documentFile && !s3ContentPdfInput.trim() && (
+              {!documentFile && (
                 <p className="text-sm text-gray-400 mt-3">
                   Please upload a document to begin
                 </p>

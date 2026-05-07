@@ -1,8 +1,8 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
+import copy
 import json
 import os
-import re
 import traceback
 from pathlib import Path
 
@@ -13,52 +13,37 @@ from bedrock_agentcore.memory.integrations.strands.session_manager import (
     AgentCoreMemorySessionManager,
 )
 from bedrock_agentcore.runtime import BedrockAgentCoreApp, RequestContext
-from mcp.client.streamable_http import streamablehttp_client
 from review_upload_hook import ReviewS3UploadHook
+from reviewers import (
+    get_reviews,
+    run_external_review,
+    run_generic_review,
+    run_internal_review,
+)
 from strands import Agent
 from strands.models import BedrockModel, CacheConfig
-from strands.tools.mcp import MCPClient
 from strands_tools import file_read, file_write
-from tools import process_pdf, batch_content, extract_claims
-from utils.auth import extract_user_id_from_context, get_gateway_access_token
+from utils.auth import extract_user_id_from_context
 from utils.inference import get_bedrock_config, get_inference_configs
-from utils.ssm import get_ssm_parameter
+
+from tools import batch_content, process_pdf
 
 INFERENCE_CONFIG, _ = get_inference_configs()
 BEDROCK_CONFIG = get_bedrock_config()
 
 app = BedrockAgentCoreApp()
 
-SYSTEM_PROMPT_PATH = Path(__file__).parent / "system_prompt.txt"
+SYSTEM_PROMPT_PATH = Path(__file__).parent / "prompts" / "orchestrator.txt"
 
-# Gateway data sources for reference verification
+# External data sources reachable via the AgentCore Gateway. The orchestrator
+# itself does NOT call these — only the external-review sub-agent does. This
+# dict exists to validate user-supplied keys and to shape the frontend toggle
+# row.
 ALL_DATA_SOURCES = {
-    "s3": {
-        "name": "S3 Text Reader",
-        "tool": "s3_text_reader",
-        "description": "Read text files and PDFs from S3",
-    },
-    "pubmed": {
-        "name": "PubMed Search",
-        "tool": "pubmed_search",
-        "description": "Search PubMed for biomedical literature to verify claims",
-    },
-    "openfda": {
-        "name": "OpenFDA Drug Search",
-        "tool": "openfda_drug_search",
-        "description": "Search FDA drug label database for pharmaceutical information",
-    },
-    "bedrock_kb": {
-        "name": "Knowledge Base Search",
-        "tool": "knowledge_base_search",
-        "description": "Query Amazon Bedrock Knowledge Bases for approved claims and guidelines",
-        "requires_params": True,
-    },
-    "nova": {
-        "name": "Nova Web Grounding",
-        "tool": "nova_web_search",
-        "description": "Web search via Amazon Nova with citations",
-    },
+    "pubmed": "PubMed Search",
+    "openfda": "OpenFDA Drug Search",
+    "clinicaltrials": "ClinicalTrials.gov Search",
+    "nova": "Nova Web Grounding",
 }
 
 
@@ -72,105 +57,58 @@ def _load_tools_config() -> dict:
 
 TOOLS_CONFIG = _load_tools_config()
 
-DATA_SOURCES = {
-    key: source
-    for key, source in ALL_DATA_SOURCES.items()
-    if TOOLS_CONFIG.get(key, {}).get("enabled", True)
-}
-
 DEFAULT_ENABLED_SOURCES = [
-    key for key in DATA_SOURCES if TOOLS_CONFIG.get(key, {}).get("default_on", False)
+    key
+    for key in ALL_DATA_SOURCES
+    if TOOLS_CONFIG.get(key, {}).get("enabled", True)
+    and TOOLS_CONFIG.get(key, {}).get("default_on", True)
 ]
 
 
-def load_system_prompt(
-    enabled_sources: list[str] | None = None,
-    content_pdf_uri: str | None = None,
-    reference_uris: list[str] | None = None,
-    claims_uris: list[str] | None = None,
-) -> str:
+def load_system_prompt() -> str:
     with open(SYSTEM_PROMPT_PATH) as f:
-        base_prompt = f.read()
-
-    if enabled_sources is None:
-        enabled_sources = DEFAULT_ENABLED_SOURCES
-
-    tools_section = "### Data Retrieval (via Gateway)\n"
-    tools_section += "The following Gateway tools are available (names start with `gateway___`):\n"
-    for source_key in enabled_sources:
-        if source_key in DATA_SOURCES:
-            source = DATA_SOURCES[source_key]
-            tools_section += f"- {source['name']}: {source['description']}\n"
-
-    if not any(s in DATA_SOURCES for s in enabled_sources):
-        tools_section += "- No external data sources enabled\n"
-
-    if "s3" in enabled_sources:
-        if content_pdf_uri:
-            tools_section += "\n### Content PDF to Review\n"
-            tools_section += f"- `{content_pdf_uri}`\n"
-        if reference_uris:
-            tools_section += "\n### Reference Materials (S3)\n"
-            tools_section += "Read these to verify claims against source data:\n"
-            for uri in reference_uris:
-                tools_section += f"- `{uri}`\n"
-        if claims_uris:
-            tools_section += "\n### Approved Claims (S3)\n"
-            tools_section += "Read these to check statements against pre-approved claims:\n"
-            for uri in claims_uris:
-                tools_section += f"- `{uri}`\n"
-
-    pattern = r"### Data Retrieval \(via Gateway\)\n(?:- .*\n)*"
-    base_prompt = re.sub(pattern, tools_section, base_prompt)
-
-    return base_prompt
+        return f.read()
 
 
-def create_gateway_mcp_client(
-    access_token: str,
-    enabled_sources: list[str] | None = None,
-) -> MCPClient:
-    stack_name = os.environ.get("STACK_NAME")
-    if not stack_name:
-        raise ValueError("STACK_NAME environment variable is required")
-    if not stack_name.replace("-", "").replace("_", "").isalnum():
-        raise ValueError("Invalid STACK_NAME format")
-
-    gateway_url = get_ssm_parameter(f"/{stack_name}/gateway_url")
-
-    tool_filters = None
-    if enabled_sources is not None:
-        allowed_tool_names = [
-            DATA_SOURCES[key]["tool"] for key in enabled_sources if key in DATA_SOURCES
-        ]
-        if allowed_tool_names:
-            pattern = re.compile(
-                r"^.*___(" + "|".join(re.escape(n) for n in allowed_tool_names) + r")$"
+def build_context_block(
+    session_id: str,
+    content_pdf_uri: str | None,
+    content_pdf_name: str | None,
+    reference_uris: list[str],
+    reference_names: list[str],
+    enabled_sources: list[str],
+) -> str:
+    """Build the per-request input block that gets appended to the user prompt."""
+    lines = [
+        "## Review inputs",
+        f"- session_id: `{session_id}`",
+        "- content_pdf:",
+        f"  - s3_uri: `{content_pdf_uri or '(missing)'}`",
+        f"  - original_filename: `{content_pdf_name or '(unknown)'}`",
+        "- references:",
+    ]
+    if reference_uris:
+        for i, uri in enumerate(reference_uris):
+            name = (
+                reference_names[i]
+                if i < len(reference_names) and reference_names[i]
+                else "(unknown)"
             )
-            tool_filters = {"allowed": [pattern]}
-
-    return MCPClient(
-        lambda: streamablehttp_client(
-            url=gateway_url, headers={"Authorization": f"Bearer {access_token}"}
-        ),
-        tool_filters=tool_filters,
-        prefix="gateway",
-    )
+            lines.append(f"  - s3_uri: `{uri}` — original_filename: `{name}`")
+    else:
+        lines.append("  - (none)")
+    lines.append(f"- enabled_sources: {enabled_sources}")
+    return "\n".join(lines)
 
 
 def create_medical_review_agent(
     user_id: str,
     session_id: str,
-    enabled_sources: list[str] | None = None,
-    content_pdf_uri: str | None = None,
-    reference_uris: list[str] | None = None,
-    claims_uris: list[str] | None = None,
+    external_sources_enabled: bool,
 ) -> tuple:
-    system_prompt = load_system_prompt(enabled_sources, content_pdf_uri, reference_uris, claims_uris)
+    system_prompt = load_system_prompt()
 
-    model_id = os.environ.get(
-        "MODEL_ID", "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
-    )
+    model_id = os.environ.get("MODEL_ID", "global.anthropic.claude-sonnet-4-6")
     bedrock_model = BedrockModel(
         model_id=model_id,
         temperature=INFERENCE_CONFIG["temperature"],
@@ -192,16 +130,25 @@ def create_medical_review_agent(
         region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
     )
 
-    tools: list = [file_read, file_write, process_pdf, batch_content, extract_claims]
-
-    access_token = get_gateway_access_token()
-    gateway_client = create_gateway_mcp_client(access_token, enabled_sources)
-    tools.append(gateway_client)
+    # Only expose the external reviewer when at least one external source is
+    # enabled. Removing it from the tool list entirely means the model cannot
+    # call it even if it tries — a stricter guard than a prompt instruction.
+    tools = [
+        file_read,
+        file_write,
+        process_pdf,
+        batch_content,
+        run_generic_review,
+        run_internal_review,
+        get_reviews,
+    ]
+    if external_sources_enabled:
+        tools.insert(5, run_external_review)
 
     review_upload_hook = ReviewS3UploadHook()
 
     agent = Agent(
-        name="MedicalContentReviewAgent",
+        name="MedicalContentReviewOrchestrator",
         system_prompt=system_prompt,
         tools=tools,
         model=bedrock_model,
@@ -252,51 +199,70 @@ def _inject_review_urls(d: dict, urls: dict[str, str]) -> None:
 @app.entrypoint
 async def agent_stream(payload, context: RequestContext):
     """
-    Main entrypoint for the medical content review agent.
+    Main entrypoint for the medical content review orchestrator.
 
     Payload fields:
     - prompt: User's review request (required)
     - runtimeSessionId: Session ID (required)
-    - enabledSources: List of enabled data sources (optional)
-    - contentPdfUri: S3 URI of the medical content PDF to review (optional)
+    - enabledSources: Subset of {pubmed, openfda, clinicaltrials, nova} (optional)
+    - contentPdfUri: S3 URI of the medical content PDF to review
     - referenceUris: List of S3 URIs for reference materials (optional)
-    - claimsUris: List of S3 URIs for approved claims files (optional)
     """
     user_query = payload.get("prompt")
     session_id = payload.get("runtimeSessionId")
-    enabled_sources = payload.get("enabledSources")
+    enabled_sources = payload.get("enabledSources") or DEFAULT_ENABLED_SOURCES
+    enabled_sources = [s for s in enabled_sources if s in ALL_DATA_SOURCES]
     content_pdf_uri = payload.get("contentPdfUri")
-    reference_uris = payload.get("referenceUris", [])
-    claims_uris = payload.get("claimsUris", [])
+    content_pdf_name = payload.get("contentPdfName") or ""
+    reference_uris = payload.get("referenceUris") or []
+    reference_names = payload.get("referenceNames") or []
 
     if not all([user_query, session_id]):
-        yield {"status": "error", "error": "Missing required fields: prompt or runtimeSessionId"}
+        yield {
+            "status": "error",
+            "error": "Missing required fields: prompt or runtimeSessionId",
+        }
         return
 
-    # Build the full prompt with PDF context
-    full_prompt = user_query
-    if content_pdf_uri:
-        full_prompt += f"\n\nMedical content PDF to review: {content_pdf_uri}"
-    if reference_uris:
-        full_prompt += f"\n\nReference materials: {', '.join(reference_uris)}"
-    if claims_uris:
-        full_prompt += f"\n\nApproved claims files: {', '.join(claims_uris)}"
+    full_prompt = (
+        user_query
+        + "\n\n"
+        + build_context_block(
+            session_id=session_id,
+            content_pdf_uri=content_pdf_uri,
+            content_pdf_name=content_pdf_name,
+            reference_uris=reference_uris,
+            reference_names=reference_names,
+            enabled_sources=enabled_sources,
+        )
+    )
 
     try:
         user_id = extract_user_id_from_context(context)
-
         agent, review_hook = create_medical_review_agent(
-            user_id, session_id, enabled_sources,
-            content_pdf_uri, reference_uris or None, claims_uris or None,
+            user_id,
+            session_id,
+            external_sources_enabled=bool(enabled_sources),
         )
 
         _keep_keys = {
-            "data", "delta", "current_tool_use", "message", "result",
-            "init_event_loop", "start_event_loop", "start", "type",
+            "data",
+            "delta",
+            "current_tool_use",
+            "message",
+            "result",
+            "init_event_loop",
+            "start_event_loop",
+            "start",
+            "type",
         }
         stream = agent.stream_async(full_prompt, session_id=session_id)
         async for event in stream:
-            d = {k: v for k, v in dict(event).items() if k in _keep_keys}
+            # Deep-copy the subset of keys we forward so that our frontend-only
+            # truncation and URL injection do NOT mutate the event objects the
+            # agent keeps in its own context — otherwise subsequent tool calls
+            # see silently chopped prior tool results.
+            d = copy.deepcopy({k: v for k, v in dict(event).items() if k in _keep_keys})
             if not d:
                 continue
             if "current_tool_use" in d:

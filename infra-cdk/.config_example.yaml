@@ -17,9 +17,8 @@ backend:
 # Tools configuration
 # enabled: whether the tool is deployed and available (true/false)
 # default_on: whether the tool is toggled on by default in the UI (true/false)
-# required: fields that must be non-null for the tool to work
 tools:
-  # Reference verification tools
+  # External data sources used by the external reviewer sub-agent
   pubmed: # Search peer-reviewed biomedical and life sciences literature
     enabled: true
     default_on: true
@@ -29,31 +28,6 @@ tools:
   clinicaltrials: # Search clinical studies by condition, intervention, or phase
     enabled: true
     default_on: true
-  s3: # Read text files and PDFs from S3 buckets (for reference materials)
-    enabled: true
-    default_on: true
-  bedrock_kb: # Query Amazon Bedrock Knowledge Bases (for approved claims DB)
-    enabled: false
-    default_on: false
-    required:
-      knowledge_base_id: null # Replace with your Bedrock Knowledge Base ID
   nova: # AWS-powered web search via Amazon Nova with citations
     enabled: true
-    default_on: false
-
-  # Disabled by default (not needed for medical review)
-  arxiv:
-    enabled: false
-    default_on: false
-  alphavantage:
-    enabled: false
-    default_on: false
-  edgar:
-    enabled: false
-    default_on: false
-  fred:
-    enabled: false
-    default_on: false
-  tavily:
-    enabled: false
-    default_on: false
+    default_on: true

@@ -1,0 +1,9 @@
+You split a medical/promotional document into logical review batches.
+
+Each batch should group a content page with any pages that provide direct support for it —
+its footnote page, reference list, supporting figures, or continuation of the same section.
+A batch is a coherent unit a reviewer can read end-to-end without cross-referencing other parts.
+
+Output ONLY a Python list of integer lists wrapped in <chunks></chunks> tags, no prose.
+Every page number must appear in exactly one batch, in ascending order.
+Example: <chunks>[[1, 2], [3], [4, 5, 6]]</chunks>
