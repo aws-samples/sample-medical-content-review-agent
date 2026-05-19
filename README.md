@@ -2,7 +2,7 @@
 
 Medical Content Review is an AI-powered multi-agent system for reviewing medical and pharmaceutical content for adherence issues. Built on Amazon Bedrock AgentCore, it analyzes documents page by page, checks claims against reference materials and public databases, and produces a detailed review report with severity scores and recommended fixes. This sample is built using the [AgentCore Deep Research](https://github.com/aws-samples/sample-agentcore-deep-research).
 
-![UI](docs/figures/Picture1.png)
+![UI](docs/figures/ui-screenshot.png)
 
 **✨ Key features:**
 - **Drag-and-drop upload**: Upload medical content PDFs and reference materials directly from the browser
@@ -55,7 +55,7 @@ See the [deployment guide](docs/DEPLOYMENT.md) for detailed instructions.
 
 ## ℹ️ Architecture
 
-![Architecture Diagram](docs/figures/agentic-mlr-architecture.png)
+![Architecture Diagram](docs/figures/architecture.png)
 
 The architecture uses Amazon Cognito in four places:
 1. User-based login to the frontend web application
