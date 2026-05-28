@@ -19,7 +19,7 @@ export class ADRMainStack extends cdk.Stack {
   public readonly cognitoStack: CognitoStack
 
   constructor(scope: Construct, id: string, props: ADRStackProps) {
-    const description = "Medical Content Review - Main Stack (uksb-q2d4demnd9)"
+    const description = "Medical Content Review - Main Stack (uksb-11u8tcck32)"
     super(scope, id, { ...props, description })
 
     // Step 1: Create the Amplify stack to get the predictable domain
