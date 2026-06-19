@@ -17,7 +17,7 @@ export interface ToolConfig {
 export interface AppConfig {
   stack_name_base: string
   region?: string | null
-  admin_user_email?: string | null
+  user_emails?: string[]
   auto_deploy_frontend?: boolean
   backend: {
     pattern: string
@@ -87,10 +87,23 @@ export class ConfigManager {
         }
       }
 
+      // Normalize user_emails into a deduplicated list of trimmed addresses
+      const rawEmails = (parsedConfig as any).user_emails
+      const userEmails = Array.isArray(rawEmails)
+        ? Array.from(
+            new Set(
+              rawEmails
+                .filter((e): e is string => typeof e === "string")
+                .map(e => e.trim())
+                .filter(e => e.length > 0)
+            )
+          )
+        : []
+
       return {
         stack_name_base: stackNameBase,
         region: parsedConfig.region || null,
-        admin_user_email: parsedConfig.admin_user_email || null,
+        user_emails: userEmails,
         auto_deploy_frontend: parsedConfig.auto_deploy_frontend ?? false,
         backend: {
           pattern: parsedConfig.backend?.pattern || "medical-content-review",
