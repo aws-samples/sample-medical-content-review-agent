@@ -62,7 +62,8 @@ Edit `config.yaml` to customize your deployment:
 stack_name_base: medical-content-review
 region: null  # AWS region (e.g., us-west-2). If null, uses AWS CLI default region.
 
-admin_user_email: null  # Optional: auto-create an admin Cognito user and email credentials
+user_emails:                  # Optional: Cognito users to create (emailed a temporary password)
+  - user@example.com
 
 backend:
   pattern: medical-content-review
@@ -202,7 +203,7 @@ This approach maintains clean Docker builds with clear separation between shared
    - User Pool for end-user sign-in
    - User Pool Client for the frontend OAuth flow
    - User Pool Domain for the hosted UI
-   - (Optional) auto-created admin user when `admin_user_email` is set
+   - (Optional) auto-created users when `user_emails` is set
 
 2. **Backend Stack**:
    - Cognito machine client + resource server for M2M authentication
