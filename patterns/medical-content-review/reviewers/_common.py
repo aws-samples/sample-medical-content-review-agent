@@ -35,7 +35,7 @@ INFERENCE_CONFIG, _ = get_inference_configs()
 BEDROCK_CONFIG = get_bedrock_config()
 MODEL_ID = os.environ.get(
     "REVIEWER_MODEL_ID",
-    os.environ.get("MODEL_ID", "global.anthropic.claude-sonnet-4-6"),
+    os.environ.get("MODEL_ID", "global.anthropic.claude-sonnet-5"),
 )
 STAGING_BUCKET = os.environ.get("STAGING_BUCKET_NAME")
 REVIEWS_PREFIX = "reviews"

@@ -20,7 +20,7 @@ MAX_PAGES = 200
 MAX_PARALLEL_PAGES = 5
 OCR_MODEL_ID = os.environ.get(
     "OCR_MODEL_ID",
-    os.environ.get("MODEL_ID", "global.anthropic.claude-sonnet-4-6"),
+    os.environ.get("MODEL_ID", "global.anthropic.claude-sonnet-5"),
 )
 STAGING_BUCKET = os.environ.get("STAGING_BUCKET_NAME")
 MARKDOWN_PREFIX = "markdowns"
