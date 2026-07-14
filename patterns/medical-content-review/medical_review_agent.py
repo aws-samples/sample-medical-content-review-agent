@@ -108,7 +108,7 @@ def create_medical_review_agent(
 ) -> tuple:
     system_prompt = load_system_prompt()
 
-    model_id = os.environ.get("MODEL_ID", "global.anthropic.claude-sonnet-4-6")
+    model_id = os.environ.get("MODEL_ID", "global.anthropic.claude-sonnet-5")
     bedrock_model = BedrockModel(
         model_id=model_id,
         temperature=INFERENCE_CONFIG["temperature"],

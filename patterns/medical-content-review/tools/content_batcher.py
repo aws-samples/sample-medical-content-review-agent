@@ -16,7 +16,7 @@ bedrock_client = boto3.client("bedrock-runtime")
 
 MODEL_ID = os.environ.get(
     "BATCHER_MODEL_ID",
-    os.environ.get("MODEL_ID", "global.anthropic.claude-sonnet-4-6"),
+    os.environ.get("MODEL_ID", "global.anthropic.claude-sonnet-5"),
 )
 STAGING_BUCKET = os.environ.get("STAGING_BUCKET_NAME")
 MARKDOWN_PREFIX = "markdowns"
