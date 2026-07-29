@@ -30,5 +30,10 @@
     "aws-cdk-lib": "^2.262.0",
     "constructs": "^10.0.0",
     "yaml": "^2.3.4"
+  },
+  "overrides": {
+    "brace-expansion": "^5.0.8",
+    "js-yaml": "^3.15.0",
+    "@babel/core": "^7.29.6"
   }
 }
