@@ -29,6 +29,8 @@ dependencies = [
     "requests>=2.31.0",
     "PyYAML>=6.0.1",
     "colorama>=0.4.6",
+    # transitive dep, floor set for GHSA-g6cj-pr64-35w5
+    "cryptography>=50.0.0",
 ]
 
 [project.optional-dependencies]
