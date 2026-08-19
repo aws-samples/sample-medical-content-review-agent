@@ -40,12 +40,13 @@
     "fast-xml-parser": ">=5.3.5",
     "rollup": ">=4.59.0",
     "flatted": ">=3.4.2",
-    "brace-expansion": "^5.0.8",
+    "brace-expansion": "^5.0.9",
     "fast-uri": "^3.1.4",
     "@babel/core": "^7.29.6",
     "@hono/node-server": "^2.0.5",
     "uuid": "^11.1.1",
-    "body-parser": "^2.2.3"
+    "body-parser": "^2.2.3",
+    "nanoid": "^3.3.18"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
