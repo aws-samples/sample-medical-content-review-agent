@@ -143,12 +143,15 @@ def start_local_agent(
     print(f"  Region: {region}")
     print(f"  Stack Name: {stack_name}\n")
 
-    # Set up environment variables
+    # Set up environment variables. The last one lets the agent take the user identity
+    # from the X-Local-User-Id header: no Cognito pool signs tokens for a local run, and
+    # the deployed Runtime never sets it, so this stays a local-only affordance.
     env = {
         **dict(subprocess.os.environ),
         "MEMORY_ID": memory_id,
         "AWS_DEFAULT_REGION": region,
         "STACK_NAME": stack_name,
+        "ALLOW_LOCAL_USER_ID_HEADER": "true",
     }
 
     # Start agent process

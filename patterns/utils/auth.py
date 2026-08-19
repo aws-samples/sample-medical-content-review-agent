@@ -30,9 +30,24 @@ JWT_ALGORITHMS = ["RS256"]
 
 # Outside a deployed runtime there is no user pool to verify a token against, so the
 # local test harness names the user in this header instead of sending a token that
-# nothing could check. STACK_NAME is always set in the deployed runtime, so this path
-# cannot be reached in production.
+# nothing could check. Only the harnesses set the opt-in variable below; the deployed
+# Runtime's environment never carries it, so the header cannot name a user in
+# production. STACK_NAME is not a usable signal for this: a local run sets it too,
+# because the SSM lookups the Gateway token depends on need it.
 LOCAL_USER_ID_HEADER = "X-Local-User-Id"
+LOCAL_AUTH_ENV_VAR = "ALLOW_LOCAL_USER_ID_HEADER"
+
+
+def _local_auth_allowed() -> bool:
+    """
+    Report whether this process may take an identity from the local header
+
+    Returns
+    -------
+    bool
+        True only when the run was explicitly started as a local test
+    """
+    return os.environ.get(LOCAL_AUTH_ENV_VAR, "").lower() in ("1", "true", "yes")
 
 
 def _header(request_headers: dict[str, str], name: str) -> str | None:
@@ -202,13 +217,14 @@ def extract_user_id_from_context(context: RequestContext) -> str:
             "that includes the Authorization header."
         )
 
-    # A local run has no pool to verify against, so the harness passes the identity
-    # directly. Unreachable once deployed, where STACK_NAME is always set.
-    if not os.environ.get("STACK_NAME"):
+    # A local run has no pool to sign a token with, so the harness passes the identity
+    # directly. Unreachable once deployed, where the opt-in variable is never set.
+    if _local_auth_allowed():
         local_user_id = _header(request_headers, LOCAL_USER_ID_HEADER)
         if local_user_id:
             logger.warning(
-                "No STACK_NAME set — trusting unverified %s header for local run",
+                "%s is set — trusting the unverified %s header for this local run",
+                LOCAL_AUTH_ENV_VAR,
                 LOCAL_USER_ID_HEADER,
             )
             return local_user_id

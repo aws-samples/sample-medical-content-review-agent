@@ -187,12 +187,16 @@ docker run --rm -it -p 8080:8080 \
   -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
   -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
   -e AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN \
+  -e ALLOW_LOCAL_USER_ID_HEADER=true \
   adr-agent-local
 
-# Test with curl (mock JWT with sub=test-user)
+# Test with curl. The agent verifies every JWT against the Cognito pool, and no pool
+# signs tokens for a local run, so the identity is named in a header instead. This is
+# only honoured because ALLOW_LOCAL_USER_ID_HEADER is set above; the deployed Runtime
+# never sets it and takes the user from the token's `sub` claim.
 curl -X POST http://localhost:8080/invocations \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $(python3 -c "import base64,json; h=base64.urlsafe_b64encode(json.dumps({'alg':'none','typ':'JWT'}).encode()).rstrip(b'=').decode(); p=base64.urlsafe_b64encode(json.dumps({'sub':'test-user'}).encode()).rstrip(b'=').decode(); print(f'{h}.{p}.')")" \
+  -H "X-Local-User-Id: test-user" \
   -d '{"prompt": "Hello", "runtimeSessionId": "test-123"}'
 ```
 

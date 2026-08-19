@@ -112,7 +112,9 @@ def run_docker_container(memory_id: str, stack_name: str, region: str) -> str | 
         if val:
             env_args.extend(["-e", f"{var}={val}"])
 
-    # Required environment variables for agent
+    # Required environment variables for agent. The last one lets the agent take the
+    # user identity from the X-Local-User-Id header, since no Cognito pool signs tokens
+    # for a container run. The deployed Runtime never sets it.
     env_args.extend(
         [
             "-e",
@@ -123,6 +125,8 @@ def run_docker_container(memory_id: str, stack_name: str, region: str) -> str | 
             f"AWS_DEFAULT_REGION={region}",
             "-e",
             f"AWS_REGION={region}",
+            "-e",
+            "ALLOW_LOCAL_USER_ID_HEADER=true",
         ]
     )
 
