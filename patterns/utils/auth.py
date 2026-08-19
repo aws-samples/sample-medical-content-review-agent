@@ -12,24 +12,175 @@ Provides:
 import base64
 import logging
 import os
+from functools import lru_cache
+from typing import Any
 
 import boto3
 import jwt
 import requests
 from bedrock_agentcore.runtime import RequestContext
+from jwt.exceptions import PyJWTError
 from utils.ssm import get_ssm_parameter
 
 logger = logging.getLogger(__name__)
+
+# Cognito signs with RS256. Pinning the algorithm here is what stops a token that asks
+# to be verified with something else — or with "none" — from being accepted.
+JWT_ALGORITHMS = ["RS256"]
+
+# Outside a deployed runtime there is no user pool to verify a token against, so the
+# local test harness names the user in this header instead of sending a token that
+# nothing could check. STACK_NAME is always set in the deployed runtime, so this path
+# cannot be reached in production.
+LOCAL_USER_ID_HEADER = "X-Local-User-Id"
+
+
+def _header(request_headers: dict[str, str], name: str) -> str | None:
+    """
+    Look a request header up without depending on the casing the caller used
+
+    Parameters
+    ----------
+    request_headers : dict[str, str]
+        Headers as handed over by the Runtime
+    name : str
+        Header name to find, in any casing
+
+    Returns
+    -------
+    str | None
+        The header value, or None when it was not sent
+    """
+    lowered = name.lower()
+    for key, value in request_headers.items():
+        if key.lower() == lowered:
+            return value
+    return None
+
+
+@lru_cache(maxsize=1)
+def _cognito_issuer() -> str:
+    """
+    Build the issuer URL of the user pool whose tokens this runtime accepts
+
+    The pool is the one the Runtime's own JWT authorizer was configured with, read from
+    the same SSM parameter the deployment writes, so the two can never drift apart.
+
+    Returns
+    -------
+    str
+        Issuer URL, e.g. ``https://cognito-idp.eu-west-1.amazonaws.com/<pool id>``
+    """
+    stack_name = os.environ["STACK_NAME"]
+    region = os.environ.get(
+        "AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+    )
+    user_pool_id = get_ssm_parameter(f"/{stack_name}/cognito-user-pool-id")
+    return f"https://cognito-idp.{region}.amazonaws.com/{user_pool_id}"
+
+
+@lru_cache(maxsize=1)
+def _allowed_client_ids() -> frozenset[str]:
+    """
+    Read the app client IDs whose tokens this runtime accepts
+
+    Returns
+    -------
+    frozenset[str]
+        The browser client and the machine-to-machine client
+
+    Raises
+    ------
+    ValueError
+        When neither client ID can be read, since accepting a token without knowing
+        who it was issued to would defeat the check
+    """
+    stack_name = os.environ["STACK_NAME"]
+    client_ids = set()
+    for parameter in ("cognito-user-pool-client-id", "machine_client_id"):
+        try:
+            client_ids.add(get_ssm_parameter(f"/{stack_name}/{parameter}"))
+        except ValueError:
+            logger.warning("No %s parameter for stack %s", parameter, stack_name)
+    if not client_ids:
+        raise ValueError(
+            f"No Cognito app client IDs found in SSM for stack {stack_name}"
+        )
+    return frozenset(client_ids)
+
+
+@lru_cache(maxsize=1)
+def _jwk_client() -> jwt.PyJWKClient:
+    """
+    Build the JWKS client for the pool, cached so keys are fetched once per container
+
+    Returns
+    -------
+    jwt.PyJWKClient
+        Client that resolves a token's `kid` to the pool's public signing key
+    """
+    return jwt.PyJWKClient(
+        f"{_cognito_issuer()}/.well-known/jwks.json", cache_keys=True
+    )
+
+
+def _verified_claims(token: str) -> dict[str, Any]:
+    """
+    Verify a Cognito JWT and return its claims
+
+    The signature is checked against the pool's published key, along with the issuer,
+    the expiry, and the client the token was issued to. The Runtime's authorizer
+    already does this before the agent is reached; repeating it here means a token is
+    never trusted on the strength of a caller's word alone.
+
+    Parameters
+    ----------
+    token : str
+        The raw JWT, without the "Bearer " prefix
+
+    Returns
+    -------
+    dict[str, Any]
+        The verified claims
+
+    Raises
+    ------
+    ValueError
+        When the token fails verification or was issued to another client
+    """
+    try:
+        signing_key = _jwk_client().get_signing_key_from_jwt(token)
+        claims: dict[str, Any] = jwt.decode(
+            token,
+            key=signing_key.key,
+            algorithms=JWT_ALGORITHMS,
+            issuer=_cognito_issuer(),
+            # A Cognito access token carries no `aud` claim, so the client is checked
+            # below against `client_id` instead of by PyJWT
+            options={"verify_aud": False, "require": ["exp", "iss", "sub"]},
+        )
+    except PyJWTError as e:
+        raise ValueError(f"JWT token failed verification: {e}") from e
+
+    presented = claims.get("client_id") or claims.get("aud")
+    presented_ids = set(presented) if isinstance(presented, list) else {presented}
+    if not presented_ids & _allowed_client_ids():
+        raise ValueError(
+            "JWT token was issued to a client this runtime does not accept"
+        )
+    return claims
 
 
 def extract_user_id_from_context(context: RequestContext) -> str:
     """
     Securely extract the user ID from the JWT token in the request context.
 
-    AgentCore Runtime validates the JWT token before passing it to the agent,
-    so we can safely skip signature verification here. The user ID is taken
-    from the token's 'sub' claim rather than from the request payload, which
-    prevents impersonation via prompt injection.
+    The token's signature, issuer, expiry, and app client are verified against the
+    Cognito user pool before any claim is read. AgentCore Runtime validates the token
+    too, but verifying it here as well means the identity does not rest on the Runtime
+    being configured correctly. The user ID is taken from the token's 'sub' claim
+    rather than from the request payload, which prevents impersonation via prompt
+    injection.
 
     Args:
         context (RequestContext): The request context provided by AgentCore
@@ -51,7 +202,18 @@ def extract_user_id_from_context(context: RequestContext) -> str:
             "that includes the Authorization header."
         )
 
-    auth_header = request_headers.get("Authorization")
+    # A local run has no pool to verify against, so the harness passes the identity
+    # directly. Unreachable once deployed, where STACK_NAME is always set.
+    if not os.environ.get("STACK_NAME"):
+        local_user_id = _header(request_headers, LOCAL_USER_ID_HEADER)
+        if local_user_id:
+            logger.warning(
+                "No STACK_NAME set — trusting unverified %s header for local run",
+                LOCAL_USER_ID_HEADER,
+            )
+            return local_user_id
+
+    auth_header = _header(request_headers, "Authorization")
     if not auth_header:
         raise ValueError(
             "No Authorization header found in request context. "
@@ -61,17 +223,12 @@ def extract_user_id_from_context(context: RequestContext) -> str:
 
     # Remove "Bearer " prefix to get the raw JWT token
     token = (
-        auth_header.replace("Bearer ", "")
+        auth_header[len("Bearer ") :]
         if auth_header.startswith("Bearer ")
         else auth_header
     )
 
-    # Decode without verification — Runtime already validated the token
-    claims = jwt.decode(  # nosemgrep: unverified-jwt-decode
-        jwt=token,
-        options={"verify_signature": False},
-        algorithms=["RS256"],
-    )
+    claims = _verified_claims(token)
 
     user_id = claims.get("sub")
     if not user_id:

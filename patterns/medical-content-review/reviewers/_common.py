@@ -44,6 +44,34 @@ REVIEWS_PREFIX = "reviews"
 CLAIMS_PREFIX = "claims"
 
 
+# The orchestrator prompt names the container-local paths the aggregators write, so the
+# filenames are fixed and cannot be randomised. `O_NOFOLLOW` and `O_CREAT` are what make
+# a fixed name under a shared /tmp safe: a symlink or a file planted there beforehand
+# cannot redirect the write, and 0600 keeps the review out of reach of another user.
+LOCAL_FILE_MODE = 0o600
+LOCAL_FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+
+
+def write_local_file(path: str, body: bytes) -> None:
+    """Write a container-local file the orchestrator will read back with `file_read`
+
+    Parameters
+    ----------
+    path : str
+        Absolute path inside the runtime container, as named in the prompt
+    body : bytes
+        Bytes to write, replacing whatever the file held before
+
+    Raises
+    ------
+    OSError
+        When the path is a symlink, which is the case this guards against
+    """
+    fd = os.open(path, LOCAL_FILE_FLAGS, LOCAL_FILE_MODE)
+    with os.fdopen(fd, "wb") as f:
+        f.write(body)
+
+
 def _require_bucket() -> str:
     if not STAGING_BUCKET:
         raise RuntimeError("STAGING_BUCKET_NAME environment variable is not set")

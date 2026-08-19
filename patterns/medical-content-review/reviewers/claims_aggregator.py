@@ -9,7 +9,12 @@ import boto3
 from botocore.config import Config
 from strands import tool
 
-from reviewers._common import CLAIMS_PREFIX, STAGING_BUCKET, safe_session_id
+from reviewers._common import (
+    CLAIMS_PREFIX,
+    STAGING_BUCKET,
+    safe_session_id,
+    write_local_file,
+)
 from reviewers.claim_tags import claims_report_path
 
 URL_EXPIRATION = 3600
@@ -107,8 +112,7 @@ def get_claims(session_id: str) -> str:
     # Keyed by session, so a container serving a later review with no claims library
     # cannot pick this report up and tag that review against these claims
     local_path = claims_report_path(session_id)
-    with open(local_path, "wb") as f:
-        f.write(body)
+    write_local_file(local_path, body)
 
     pointer = {
         "claims_report_s3_uri": f"s3://{STAGING_BUCKET}/{report_key}",

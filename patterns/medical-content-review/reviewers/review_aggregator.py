@@ -8,7 +8,7 @@ import re
 import boto3
 from strands import tool
 
-from reviewers._common import REVIEWS_PREFIX, STAGING_BUCKET
+from reviewers._common import REVIEWS_PREFIX, STAGING_BUCKET, write_local_file
 from reviewers.claim_tags import load_claim_records, tag_findings
 
 s3_client = boto3.client("s3")
@@ -105,8 +105,7 @@ def get_reviews(session_id: str) -> str:
         Body=body,
         ContentType="application/json",
     )
-    with open(LOCAL_AGGREGATE_PATH, "wb") as f:
-        f.write(body)
+    write_local_file(LOCAL_AGGREGATE_PATH, body)
 
     pointer = {
         "local_path": LOCAL_AGGREGATE_PATH,

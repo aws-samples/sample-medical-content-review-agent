@@ -209,28 +209,6 @@ def print_section(title: str, width: int = 60) -> None:
     print("=" * width + "\n")
 
 
-def create_mock_jwt(user_id: str) -> str:
-    """
-    Create a mock unsigned JWT token with the given user_id as the 'sub' claim.
-
-    The agent's extract_user_id_from_context() decodes the JWT without signature
-    verification (since AgentCore Runtime validates it in production). This allows
-    local testing to pass a user identity the same way production does.
-
-    Args:
-        user_id (str): The user ID to embed as the 'sub' claim.
-
-    Returns:
-        str: A mock JWT string (header.payload.signature).
-    """
-    header = (
-        base64.urlsafe_b64encode(json.dumps({"alg": "none", "typ": "JWT"}).encode())
-        .rstrip(b"=")
-        .decode()
-    )
-    payload = (
-        base64.urlsafe_b64encode(json.dumps({"sub": user_id}).encode())
-        .rstrip(b"=")
-        .decode()
-    )
-    return f"{header}.{payload}."
+# A mock unsigned JWT used to live here for local runs. The agent now verifies every
+# token against the Cognito pool, so local runs name the user in the X-Local-User-Id
+# header instead — an unsigned token would (correctly) be rejected.

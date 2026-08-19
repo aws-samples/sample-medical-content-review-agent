@@ -51,7 +51,6 @@ if str(scripts_dir) not in sys.path:
 # Import shared utilities
 from utils import (
     authenticate_cognito,
-    create_mock_jwt,
     generate_session_id,
     get_stack_config,
     print_msg,
@@ -310,9 +309,9 @@ def invoke_agent(
         url (str): Agent endpoint URL
         prompt (str): User prompt/query
         session_id (str): Session ID for conversation continuity
-        user_id (str): User ID for mock JWT in local testing only. In remote mode,
-            the real Cognito JWT carries the user identity, user_id is never sent
-            in the payload to prevent prompt injection impersonation.
+        user_id (str): User ID sent in the X-Local-User-Id header, local mode only.
+            In remote mode the real Cognito JWT carries the user identity, user_id is
+            never sent in the payload to prevent prompt injection impersonation.
         headers (Optional[Dict[str, str]]): Optional HTTP headers
         attachments (Optional[dict]): Document/claims payload fields from the CLI
     """
@@ -323,10 +322,9 @@ def invoke_agent(
     payload.update(attachments or {})
 
     if headers is None:
-        # Local mode: generate a mock JWT so the agent can extract user_id
-        # from the Authorization header, matching the production auth flow.
-        mock_token = create_mock_jwt(user_id)
-        headers = {"Authorization": f"Bearer {mock_token}"}
+        # Local mode: there is no Cognito pool to sign or verify a token against, so
+        # the identity is named directly. Deployed runs always go through the JWT.
+        headers = {"X-Local-User-Id": user_id}
     headers["Content-Type"] = "application/json"
 
     try:
