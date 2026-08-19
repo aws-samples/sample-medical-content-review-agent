@@ -1039,7 +1039,7 @@ export class BackendStack extends cdk.NestedStack {
         },
         credentialProviderConfigurations: [{ credentialProviderType: "GATEWAY_IAM_ROLE" }],
       })
-      target.addDependency(gateway)
+      target.addResourceDependency(gateway)
       return target
     }
 
@@ -1086,7 +1086,7 @@ export class BackendStack extends cdk.NestedStack {
     // ========== END GATEWAY TOOL TARGETS ==========
 
     // Ensure proper creation order
-    gatewayTarget.addDependency(gateway)
+    gatewayTarget.addResourceDependency(gateway)
     gateway.node.addDependency(toolLambda)
     if (novaSearchLambda) gateway.node.addDependency(novaSearchLambda)
     if (openfdaLambda) gateway.node.addDependency(openfdaLambda)
