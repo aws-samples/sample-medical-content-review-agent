@@ -14,6 +14,7 @@ skips it, and `load_claims_library` parses the file during the run exactly as be
 
 import json
 import os
+import re
 import uuid
 
 import boto3
@@ -36,6 +37,13 @@ CORS_ALLOWED_ORIGINS = os.environ.get("CORS_ALLOWED_ORIGINS", "*")
 # file to stream
 UPLOADS_PREFIX = "uploads/"
 MAX_CLAIMS_FILE_BYTES = 20 * 1024 * 1024
+
+# The shape `/upload` mints below, so the parse endpoint accepts only keys this API
+# could have created itself rather than denylisting the traversal spellings
+UPLOADED_KEY_RE = re.compile(rf"{UPLOADS_PREFIX}[0-9a-f]{{32}}\.[a-z0-9]{{1,16}}")
+# A client filename decides the extension, so keep it to plain characters: it ends up
+# in a key, and "a.b/c" would otherwise put a slash there
+EXTENSION_RE = re.compile(r"[^A-Za-z0-9]")
 
 cors_origins = [o.strip() for o in CORS_ALLOWED_ORIGINS.split(",") if o.strip()]
 cors_config = CORSConfig(
@@ -62,8 +70,9 @@ def create_upload_url():
     body: dict = app.current_event.json_body  # type: ignore[assignment]
     req = UploadRequest(**body)
 
-    ext = req.filename.rsplit(".", 1)[-1] if "." in req.filename else "pdf"
-    key = f"uploads/{uuid.uuid4().hex}.{ext}"
+    raw_ext = req.filename.rsplit(".", 1)[-1] if "." in req.filename else "pdf"
+    ext = EXTENSION_RE.sub("", raw_ext).lower()[:16] or "bin"
+    key = f"{UPLOADS_PREFIX}{uuid.uuid4().hex}.{ext}"
 
     url = s3_client.generate_presigned_url(
         "put_object",
@@ -105,7 +114,7 @@ def _uploaded_key(s3_uri: str) -> str:
     if not s3_uri.startswith("s3://"):
         raise BadRequestError("s3Uri must be an s3:// URI")
     bucket, _, key = s3_uri[5:].partition("/")
-    if bucket != BUCKET_NAME or not key.startswith(UPLOADS_PREFIX) or ".." in key:
+    if bucket != BUCKET_NAME or not UPLOADED_KEY_RE.fullmatch(key):
         raise BadRequestError(f"s3Uri must point at {BUCKET_NAME}/{UPLOADS_PREFIX}")
     return key
 
