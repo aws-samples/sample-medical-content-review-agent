@@ -7,15 +7,24 @@ import { ChatHeader } from "./ChatHeader";
 import { Message, MessageSegment, ToolCall } from "./types";
 import {
   ReviewResultsPanel,
+  ClaimsLibraryPreview,
   ReviewIssue,
   ActivityEntry,
+  ClaimsLibraryEntry,
+  ClaimsReport,
+  Phase,
+  PreviewDoc,
 } from "./ReviewResultsPanel";
 import { FileUploadCards } from "./FileUploadCards";
 import { DataSourceBar } from "./DataSourceBar";
 import { useGlobal } from "@/app/context/GlobalContext";
 import { AgentCoreClient } from "@/lib/agentcore-client";
 import type { AgentPattern } from "@/lib/agentcore-client";
-import { uploadFileToS3, getOriginalName } from "@/services/uploadService";
+import {
+  uploadFileToS3,
+  getOriginalName,
+  parseClaimsFile,
+} from "@/services/uploadService";
 import { useAuth } from "react-oidc-context";
 
 // Strip any gateway prefix (e.g. "gateway_pubmed-search-target___pubmed_search" -> "pubmed_search")
@@ -24,35 +33,66 @@ function stripGatewayPrefix(name: string): string {
   return sep >= 0 ? name.slice(sep + 3) : name;
 }
 
-// Map a tool name to the index of one of the 5 progress phases
-function toolToPhaseIdx(name: string): number {
+// The reviewer phase absorbs every tool we don't map explicitly (gateway searches
+// inside sub-agents, file_read, ...), so unknown tools never stall the checklist.
+const REVIEWERS_PHASE: Phase = {
+  icon: "🔍",
+  text: "Running reviewers in parallel",
+  tools: [
+    "run_generic_review",
+    "run_external_review",
+    "run_internal_review",
+    "pubmed_search",
+    "openfda_drug_search",
+    "clinicaltrials_search",
+    "nova_web_search",
+    "read_reference_markdown",
+  ],
+};
+
+// The claim phases only exist when a pre-approved claims library was uploaded —
+// otherwise the backend never exposes those tools and the phases would never
+// complete, stalling the checklist.
+const CLAIM_PHASES: Phase[] = [
+  { icon: "📝", text: "Extracting claims", tools: ["extract_claims"] },
+  {
+    icon: "🏷️",
+    text: "Matching pre-approved claims",
+    tools: ["match_claims", "get_claims"],
+  },
+];
+
+function buildPhases(withClaims: boolean): Phase[] {
+  return [
+    {
+      icon: "📄",
+      text: "Reading documents",
+      tools: ["process_pdf", "load_claims_library"],
+    },
+    { icon: "✂️", text: "Splitting into batches", tools: ["batch_content"] },
+    ...(withClaims ? CLAIM_PHASES : []),
+    REVIEWERS_PHASE,
+    { icon: "🧩", text: "Merging reviewer findings", tools: ["get_reviews"] },
+    { icon: "✅", text: "Writing final report", tools: ["file_write"] },
+  ];
+}
+
+// Map a tool name to the index of the progress phase it belongs to
+function toolToPhaseIdx(name: string, phases: Phase[]): number {
   const core = stripGatewayPrefix(name);
-  if (core === "process_pdf") return 0;
-  if (core === "batch_content") return 1;
-  if (
-    core === "run_generic_review" ||
-    core === "run_external_review" ||
-    core === "run_internal_review"
-  )
-    return 2;
-  if (core === "get_reviews") return 3;
-  if (core === "file_write") return 4;
-  // Gateway searches inside reviewer sub-agents still live in phase 2
-  if (
-    core === "pubmed_search" ||
-    core === "openfda_drug_search" ||
-    core === "clinicaltrials_search" ||
-    core === "nova_web_search" ||
-    core === "read_reference_markdown"
-  )
-    return 2;
-  return 2;
+  const idx = phases.findIndex((phase) => phase.tools.includes(core));
+  if (idx >= 0) return idx;
+  return phases.findIndex((phase) => phase.text === REVIEWERS_PHASE.text);
 }
 
 // Display metadata keyed by the bare tool name (after stripping any gateway prefix)
 const TOOL_META: Record<string, { label: string; icon: string }> = {
   process_pdf: { label: "Processing PDF", icon: "📄" },
+  load_claims_library: { label: "Loading pre-approved claims", icon: "📗" },
   batch_content: { label: "Splitting into batches", icon: "✂️" },
+  extract_claims: { label: "Extracting claims", icon: "📝" },
+  match_claims: { label: "Matching pre-approved claims", icon: "🏷️" },
+  get_claims: { label: "Merging claim matches", icon: "🗂️" },
   run_generic_review: { label: "Editorial", icon: "🧐" },
   run_external_review: { label: "External Evidence", icon: "🔬" },
   run_internal_review: { label: "Internal References", icon: "📚" },
@@ -105,11 +145,15 @@ function extractDetailFromInput(
       "key",
       "markdown_s3_uri",
       "batch_md_s3_uri",
+      "extracted_claims_s3_uri",
     ];
     if (
       [
         "process_pdf",
+        "load_claims_library",
         "batch_content",
+        "extract_claims",
+        "match_claims",
         "run_generic_review",
         "run_external_review",
         "run_internal_review",
@@ -162,6 +206,21 @@ function extractReviewUrl(result: string): string | null {
   const match = result.match(/\[REVIEW_URL:(https?:\/\/[^\]]+)\]/);
   return match ? match[1] : null;
 }
+
+// Extract the claims report URL that `get_claims` appends to its own result
+function extractClaimsUrl(result: string): string | null {
+  const match = result.match(/\[CLAIMS_URL:(https?:\/\/[^\]]+)\]/);
+  return match ? match[1] : null;
+}
+
+// Extract the parsed claims library URL that `load_claims_library` appends
+function extractClaimsLibUrl(result: string): string | null {
+  const match = result.match(/\[CLAIMS_LIB_URL:(https?:\/\/[^\]]+)\]/);
+  return match ? match[1] : null;
+}
+
+// Strip the URL tags we inject into tool results before showing them in the UI
+const URL_TAG_RE = /\n*\[(?:REVIEW|CLAIMS|CLAIMS_LIB)_URL:[^\]]+\]/g;
 
 // Fetch content from pre-signed S3 URL
 async function fetchUrl(url: string): Promise<string | null> {
@@ -241,6 +300,28 @@ function newSessionId(): string {
   return `${ts}_${suffix}`;
 }
 
+// Outcome of parsing the claims spreadsheet at upload time. The review does not depend
+// on it — the agent parses the file itself — so an error here only informs the user.
+interface ClaimsPreviewState {
+  status: "parsing" | "ready" | "error";
+  totalClaims?: number;
+  byStatus?: Record<string, number>;
+  columnMapping?: Record<string, string>;
+  unmappedColumns?: string[];
+  message?: string;
+}
+
+// "12 claims · 10 approved, 2 expired" for the upload card
+function claimsSummaryText(preview: ClaimsPreviewState): string {
+  const total = `${preview.totalClaims ?? 0} claim${
+    preview.totalClaims === 1 ? "" : "s"
+  } parsed`;
+  const byStatus = Object.entries(preview.byStatus || {})
+    .map(([status, count]) => `${count} ${status.toLowerCase()}`)
+    .join(", ");
+  return byStatus ? `${total} · ${byStatus}` : total;
+}
+
 export default function ChatInterface() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -256,23 +337,43 @@ export default function ChatInterface() {
   const [documentFile, setDocumentFile] = useState<File | null>(null);
   const [documentUrl, setDocumentUrl] = useState<string | null>(null);
   const [referenceFiles, setReferenceFiles] = useState<File[]>([]);
+  const [claimsFile, setClaimsFile] = useState<File | null>(null);
+  // Where the claims file was uploaded to when it was picked, reused at review start
+  // so the same object is handed to the agent instead of being uploaded twice
+  const [claimsS3Uri, setClaimsS3Uri] = useState<string | null>(null);
+  const [claimsPreview, setClaimsPreview] = useState<ClaimsPreviewState | null>(
+    null,
+  );
+  // Bumped on every claims-file change so a slow parse for a replaced file is ignored
+  const claimsRequestRef = useRef(0);
   const [isUploading, setIsUploading] = useState(false);
   const [landingPreviewIdx, setLandingPreviewIdx] = useState<number>(0);
 
   // Review results state
   const [reviewIssues, setReviewIssues] = useState<ReviewIssue[]>([]);
+  const [claimsReport, setClaimsReport] = useState<ClaimsReport | null>(null);
+  // The parsed claims library, previewed beside the documents once it is loaded
+  const [claimsLibrary, setClaimsLibrary] = useState<
+    ClaimsLibraryEntry[] | null
+  >(null);
   const [showReviewPanel, setShowReviewPanel] = useState<boolean>(false);
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
-  // Per-phase counters: how many tool runs have started vs. completed for each of the 5 phases
-  const [phaseStarted, setPhaseStarted] = useState<number[]>(() => [
-    0, 0, 0, 0, 0,
-  ]);
-  const [phaseDone, setPhaseDone] = useState<number[]>(() => [0, 0, 0, 0, 0]);
+  // Phase list for this run — grows by two steps when a claims library is used
+  const [phases, setPhases] = useState<Phase[]>(() => buildPhases(false));
+  // Per-phase counters: how many tool runs have started vs. completed per phase
+  const [phaseStarted, setPhaseStarted] = useState<number[]>(() =>
+    buildPhases(false).map(() => 0),
+  );
+  const [phaseDone, setPhaseDone] = useState<number[]>(() =>
+    buildPhases(false).map(() => 0),
+  );
   const [reviewStartedAt, setReviewStartedAt] = useState<number | null>(null);
   const lastReviewUrlRef = useRef<string | null>(null);
   const toolStartMap = useRef<
     Map<string, { name: string; activityIdx: number }>
   >(new Map());
+  // Read inside the stream callback, where the `phases` state may be stale
+  const phasesRef = useRef<Phase[]>(phases);
 
   const getEnabledSourceIds = () =>
     Object.entries(enabledSources)
@@ -281,7 +382,7 @@ export default function ChatInterface() {
 
   // Build a combined preview list (main doc + references) with blob URLs.
   // Managed in useMemo so object URLs are revoked when files change.
-  const previewDocs = useMemo(() => {
+  const pdfPreviewDocs = useMemo(() => {
     const docs: { name: string; url: string; kind: "content" | "reference" }[] =
       [];
     if (documentFile && documentFile.type === "application/pdf") {
@@ -305,12 +406,71 @@ export default function ChatInterface() {
 
   useEffect(() => {
     return () => {
-      for (const d of previewDocs) URL.revokeObjectURL(d.url);
+      for (const d of pdfPreviewDocs) URL.revokeObjectURL(d.url);
     };
-  }, [previewDocs]);
+  }, [pdfPreviewDocs]);
+
+  // The claims spreadsheet cannot be embedded like a PDF, so it becomes a table tab
+  // as soon as it is parsed — at upload time, or during the run for a library the
+  // agent loaded itself
+  const previewDocs: PreviewDoc[] = useMemo(() => {
+    if (!claimsLibrary) return pdfPreviewDocs;
+    return [
+      ...pdfPreviewDocs,
+      {
+        name: claimsFile?.name || "Pre-approved claims",
+        kind: "claims" as const,
+        claims: claimsLibrary,
+        columnMapping: claimsPreview?.columnMapping,
+        unmappedColumns: claimsPreview?.unmappedColumns,
+      },
+    ];
+  }, [pdfPreviewDocs, claimsLibrary, claimsFile, claimsPreview]);
 
   const { isLoading, setIsLoading } = useGlobal();
   const auth = useAuth();
+
+  // Upload and parse the claims library the moment it is picked, so the table can be
+  // reviewed before starting a run. Failures are reported but never block the review.
+  const handleClaimsChange = async (file: File | null) => {
+    const seq = ++claimsRequestRef.current;
+    setClaimsFile(file);
+    setClaimsS3Uri(null);
+    setClaimsLibrary(null);
+    setClaimsPreview(file ? { status: "parsing" } : null);
+    if (!file) return;
+
+    const idToken = auth.user?.id_token;
+    if (!idToken) {
+      setClaimsPreview({
+        status: "error",
+        message: "Authentication required.",
+      });
+      return;
+    }
+
+    try {
+      const uri = await uploadFileToS3(file, idToken);
+      if (seq !== claimsRequestRef.current) return;
+      setClaimsS3Uri(uri);
+      const parsed = await parseClaimsFile(uri, file.name, idToken);
+      if (seq !== claimsRequestRef.current) return;
+      setClaimsLibrary(parsed.claims as unknown as ClaimsLibraryEntry[]);
+      setClaimsPreview({
+        status: "ready",
+        totalClaims: parsed.totalClaims,
+        byStatus: parsed.byStatus,
+        columnMapping: parsed.columnMapping,
+        unmappedColumns: parsed.unmappedColumns,
+      });
+    } catch (err) {
+      if (seq !== claimsRequestRef.current) return;
+      setClaimsPreview({
+        status: "error",
+        message: err instanceof Error ? err.message : "Unknown error",
+      });
+    }
+  };
 
   // Load agent configuration and create client on mount
   useEffect(() => {
@@ -357,6 +517,8 @@ export default function ChatInterface() {
     contentPdfName?: string,
     referenceNames?: string[],
     overrideSessionId?: string,
+    claimsUri?: string,
+    claimsName?: string,
   ) => {
     if (!userMessage.trim() || !client) return;
     setError(null);
@@ -369,8 +531,17 @@ export default function ChatInterface() {
     setMessages((prev) => [...prev, newUserMessage]);
     setIsLoading(true);
     setReviewStartedAt(Date.now());
-    setPhaseStarted([0, 0, 0, 0, 0]);
-    setPhaseDone([0, 0, 0, 0, 0]);
+    // The phase list depends on whether this run has a claims library, so build
+    // it here and keep it in a ref for the stream callback.
+    const runPhases = buildPhases(Boolean(claimsUri));
+    phasesRef.current = runPhases;
+    setPhases(runPhases);
+    setPhaseStarted(runPhases.map(() => 0));
+    setPhaseDone(runPhases.map(() => 0));
+    setClaimsReport(null);
+    // Keep a library that was already parsed at upload time — the agent reads the same
+    // file and writes the same JSON, so there is nothing to re-fetch before showing it
+    if (!claimsUri) setClaimsLibrary(null);
     setActivityLog([]);
     toolStartMap.current.clear();
 
@@ -450,7 +621,7 @@ export default function ChatInterface() {
               segments.push({ type: "tool", toolCall: tc });
 
               const meta = getToolMeta(event.name);
-              const phaseIdx = toolToPhaseIdx(event.name);
+              const phaseIdx = toolToPhaseIdx(event.name, phasesRef.current);
               if (phaseIdx >= 0) {
                 setPhaseStarted((prev) => {
                   const next = [...prev];
@@ -504,12 +675,18 @@ export default function ChatInterface() {
             case "tool_result": {
               const tc = toolCallMap.get(event.toolUseId);
               if (tc) {
+                const failed = event.status === "error";
                 tc.result = event.result;
                 tc.status = "complete";
                 const started = toolStartMap.current.get(event.toolUseId);
                 if (started) {
-                  const phaseIdx = toolToPhaseIdx(started.name);
-                  if (phaseIdx >= 0) {
+                  const phaseIdx = toolToPhaseIdx(
+                    started.name,
+                    phasesRef.current,
+                  );
+                  // Only a successful call advances its phase — a phase ticked off by a
+                  // failed tool would hide the very step that did not happen
+                  if (phaseIdx >= 0 && !failed) {
                     setPhaseDone((prev) => {
                       const next = [...prev];
                       next[phaseIdx] += 1;
@@ -520,19 +697,61 @@ export default function ChatInterface() {
                     typeof event.result === "string"
                       ? event.result
                       : JSON.stringify(event.result, null, 2);
-                  const cleanOutput = rawOutput
-                    .replace(/\n*\[REVIEW_URL:[^\]]+\]/g, "")
-                    .trim();
+                  const cleanOutput = rawOutput.replace(URL_TAG_RE, "").trim();
                   setActivityLog((prev) => {
                     if (started.activityIdx >= prev.length) return prev;
                     const next = [...prev];
                     next[started.activityIdx] = {
                       ...next[started.activityIdx],
-                      status: "done",
+                      status: failed ? "error" : "done",
                       output: cleanOutput || undefined,
                     };
                     return next;
                   });
+                }
+
+                // The parsed claims library becomes a preview tab, so the user can
+                // see what their content was matched against
+                if (tc.name === "load_claims_library") {
+                  const libUrl = extractClaimsLibUrl(tc.result || "");
+                  if (libUrl) {
+                    fetchUrl(libUrl).then((content) => {
+                      if (!content) return;
+                      try {
+                        const parsed = JSON.parse(content);
+                        if (Array.isArray(parsed)) {
+                          setClaimsLibrary(parsed as ClaimsLibraryEntry[]);
+                        }
+                      } catch {
+                        /* ignore */
+                      }
+                    });
+                  }
+                  if (tc.result) {
+                    tc.result = tc.result.replace(URL_TAG_RE, "").trim();
+                  }
+                }
+
+                // The claims report is published while the reviewers are still
+                // running, so the match tags show up in the UI early.
+                if (tc.name === "get_claims") {
+                  const claimsUrl = extractClaimsUrl(tc.result || "");
+                  if (claimsUrl) {
+                    fetchUrl(claimsUrl).then((content) => {
+                      if (!content) return;
+                      try {
+                        const parsed = JSON.parse(content);
+                        if (parsed && Array.isArray(parsed.claims)) {
+                          setClaimsReport(parsed as ClaimsReport);
+                        }
+                      } catch {
+                        /* ignore */
+                      }
+                    });
+                  }
+                  if (tc.result) {
+                    tc.result = tc.result.replace(URL_TAG_RE, "").trim();
+                  }
                 }
 
                 if (tc.name === "file_write") {
@@ -560,9 +779,7 @@ export default function ChatInterface() {
                     }
                   }
                   if (tc.result) {
-                    tc.result = tc.result
-                      .replace(/\n*\[REVIEW_URL:[^\]]+\]/g, "")
-                      .trim();
+                    tc.result = tc.result.replace(URL_TAG_RE, "").trim();
                   }
                 }
               }
@@ -587,6 +804,8 @@ export default function ChatInterface() {
         referenceNames && referenceNames.length > 0
           ? referenceNames
           : undefined,
+        claimsUri?.startsWith("s3://") ? claimsUri : undefined,
+        claimsName || undefined,
       );
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
@@ -628,6 +847,7 @@ export default function ChatInterface() {
 
     let contentUri: string | undefined;
     let refUris: string[] = [];
+    let claimsUri: string | undefined;
 
     setIsUploading(true);
     try {
@@ -636,6 +856,10 @@ export default function ChatInterface() {
         refUris = await Promise.all(
           referenceFiles.map((f) => uploadFileToS3(f, idToken)),
         );
+      }
+      if (claimsFile) {
+        // Already uploaded when the file was picked, unless that upload failed
+        claimsUri = claimsS3Uri ?? (await uploadFileToS3(claimsFile, idToken));
       }
     } catch (err) {
       setError(
@@ -648,8 +872,9 @@ export default function ChatInterface() {
     }
     setIsUploading(false);
 
-    const prompt =
-      "Please review the attached medical content document for adherence issues. Analyze all pages, cross-check claims against references, and produce a detailed review report.";
+    const prompt = claimsFile
+      ? "Please review the attached medical content document for adherence issues. Analyze all pages, extract the claims and match them against the pre-approved claims library first, cross-check the remaining claims against references, and produce a detailed review report."
+      : "Please review the attached medical content document for adherence issues. Analyze all pages, cross-check claims against references, and produce a detailed review report.";
     const contentName = documentFile.name;
     const refNames = referenceFiles.map((f) => f.name);
     setShowReviewPanel(true);
@@ -660,6 +885,8 @@ export default function ChatInterface() {
       contentName,
       refNames.length > 0 ? refNames : undefined,
       freshSessionId,
+      claimsUri,
+      claimsFile?.name,
     );
   };
 
@@ -670,10 +897,15 @@ export default function ChatInterface() {
     setError(null);
     setIsLoading(false);
     setReviewIssues([]);
+    setClaimsReport(null);
+    setClaimsLibrary(null);
     setShowReviewPanel(false);
     setActivityLog([]);
-    setPhaseStarted([0, 0, 0, 0, 0]);
-    setPhaseDone([0, 0, 0, 0, 0]);
+    const freshPhases = buildPhases(false);
+    phasesRef.current = freshPhases;
+    setPhases(freshPhases);
+    setPhaseStarted(freshPhases.map(() => 0));
+    setPhaseDone(freshPhases.map(() => 0));
     setReviewStartedAt(null);
     toolStartMap.current.clear();
     lastReviewUrlRef.current = null;
@@ -685,6 +917,11 @@ export default function ChatInterface() {
     setDocumentFile(null);
     setDocumentUrl(null);
     setReferenceFiles([]);
+    claimsRequestRef.current += 1;
+    setClaimsFile(null);
+    setClaimsS3Uri(null);
+    setClaimsPreview(null);
+    setLandingPreviewIdx(0);
     setIsUploading(false);
   };
 
@@ -720,9 +957,18 @@ export default function ChatInterface() {
               }}
               referenceFiles={referenceFiles}
               onReferenceFilesChange={setReferenceFiles}
+              claimsFile={claimsFile}
+              onClaimsChange={handleClaimsChange}
+              claimsStatus={claimsPreview?.status}
+              claimsSummary={
+                claimsPreview?.status === "ready"
+                  ? claimsSummaryText(claimsPreview)
+                  : undefined
+              }
+              claimsError={claimsPreview?.message}
             />
 
-            {/* Document Preview (shown when a PDF is selected) */}
+            {/* Preview of everything attached: PDFs plus the parsed claims table */}
             {previewDocs.length > 0 && (
               <details
                 open
@@ -730,7 +976,7 @@ export default function ChatInterface() {
               >
                 <summary className="bg-gradient-to-r from-purple-50 to-pink-50 dark:from-purple-950/40 dark:to-pink-950/40 px-6 py-4 border-b border-gray-200 dark:border-gray-700 cursor-pointer select-none list-none flex items-center justify-between">
                   <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                    Document Preview
+                    Attachment Preview
                   </h3>
                   <svg
                     className="w-5 h-5 text-gray-500 dark:text-gray-400 transition-transform group-open:rotate-90"
@@ -768,7 +1014,11 @@ export default function ChatInterface() {
                           title={doc.name}
                         >
                           <span className="text-sm leading-none">
-                            {doc.kind === "content" ? "📄" : "📎"}
+                            {doc.kind === "content"
+                              ? "📄"
+                              : doc.kind === "claims"
+                              ? "📗"
+                              : "📎"}
                           </span>
                           <span className="truncate">{doc.name}</span>
                         </button>
@@ -777,15 +1027,28 @@ export default function ChatInterface() {
                   </div>
                 )}
                 <div className="h-[600px] overflow-hidden">
-                  <iframe
-                    src={
+                  {(() => {
+                    const active =
                       previewDocs[
                         Math.min(landingPreviewIdx, previewDocs.length - 1)
-                      ]?.url
+                      ];
+                    if (active?.kind === "claims") {
+                      return (
+                        <ClaimsLibraryPreview
+                          claims={active.claims || []}
+                          columnMapping={active.columnMapping}
+                          unmappedColumns={active.unmappedColumns}
+                        />
+                      );
                     }
-                    className="w-full h-full"
-                    title="PDF Document"
-                  />
+                    return (
+                      <iframe
+                        src={active?.url}
+                        className="w-full h-full"
+                        title="PDF Document"
+                      />
+                    );
+                  })()}
                 </div>
               </details>
             )}
@@ -852,8 +1115,10 @@ export default function ChatInterface() {
         <div className="grow overflow-hidden">
           <ReviewResultsPanel
             issues={reviewIssues}
+            claimsReport={claimsReport}
             isLoading={isLoading}
             activityLog={activityLog}
+            phases={phases}
             phaseStarted={phaseStarted}
             phaseDone={phaseDone}
             startedAt={reviewStartedAt}

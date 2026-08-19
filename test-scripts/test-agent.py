@@ -20,6 +20,11 @@ Usage:
 
     # Override pattern from config
     uv run scripts/test-agent.py --pattern medical-content-review
+
+    # Full medical content review without the UI: local files are uploaded to the
+    # staging bucket's uploads/ prefix, s3:// URIs are passed through as they are
+    uv run scripts/test-agent.py --content-pdf ./brochure.pdf \
+        --reference ./dossier.pdf --claims ./approved_claims.xlsx --prompt "Review it"
 """
 
 import argparse
@@ -31,8 +36,10 @@ import socket
 import subprocess  # nosec B404 - subprocess used securely with explicit parameters
 import sys
 import time
+import uuid
 from pathlib import Path
 
+import boto3
 import requests
 from colorama import Fore, Style
 
@@ -200,12 +207,101 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 
 
+def upload_to_staging(path: Path, bucket: str) -> str:
+    """
+    Upload a local file to the staging bucket's uploads/ prefix.
+
+    The agent's execution role may read that prefix only, so anything the agent has to
+    open has to live there - this mirrors what the pre-signed upload API does for the UI.
+
+    Args:
+        path (Path): Local file to upload
+        bucket (str): Staging bucket name (StagingBucketName stack output)
+
+    Returns:
+        str: The s3:// URI of the uploaded object
+    """
+    key = f"uploads/{uuid.uuid4().hex}{path.suffix.lower()}"
+    boto3.client("s3").upload_file(str(path), bucket, key)
+    print(f"  Uploaded {path.name} -> s3://{bucket}/{key}")
+    return f"s3://{bucket}/{key}"
+
+
+def resolve_attachment(value: str, bucket: str) -> tuple[str, str]:
+    """
+    Turn a CLI file argument into the (s3 URI, display name) pair the payload needs.
+
+    Args:
+        value (str): Local path or an existing s3:// URI
+        bucket (str): Staging bucket name, used when the file has to be uploaded
+
+    Returns:
+        tuple[str, str]: The s3:// URI and the original filename
+    """
+    if value.startswith("s3://"):
+        return value, value.rsplit("/", 1)[-1]
+
+    path = Path(value).expanduser()
+    if not path.is_file():
+        print_msg(f"File not found: {value}", "error")
+        sys.exit(1)
+    if not bucket:
+        print_msg(
+            "Cannot upload local files: the stack has no StagingBucketName output. "
+            "Pass s3:// URIs instead.",
+            "error",
+        )
+        sys.exit(1)
+    return upload_to_staging(path, bucket), path.name
+
+
+def build_attachments(args: argparse.Namespace, bucket: str) -> dict:
+    """
+    Build the payload fields that point the review at its documents.
+
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments
+        bucket (str): Staging bucket name for uploading local files
+
+    Returns:
+        dict: Payload fields to merge into the invocation, empty when nothing was passed
+    """
+    attachments: dict = {}
+
+    if args.content_pdf:
+        uri, name = resolve_attachment(args.content_pdf, bucket)
+        attachments["contentPdfUri"] = uri
+        attachments["contentPdfName"] = name
+
+    if args.reference:
+        resolved = [resolve_attachment(ref, bucket) for ref in args.reference]
+        attachments["referenceUris"] = [uri for uri, _ in resolved]
+        attachments["referenceNames"] = [name for _, name in resolved]
+
+    if args.claims:
+        uri, name = resolve_attachment(args.claims, bucket)
+        # claimsUri is what switches claim extraction and matching on; claimsName lets
+        # the parser pick its reader from the extension
+        attachments["claimsUri"] = uri
+        attachments["claimsName"] = name
+
+    if args.enabled_sources is not None:
+        attachments["enabledSources"] = [
+            source.strip()
+            for source in args.enabled_sources.split(",")
+            if source.strip()
+        ]
+
+    return attachments
+
+
 def invoke_agent(
     url: str,
     prompt: str,
     session_id: str,
     user_id: str = "local-test-user",
     headers: dict[str, str] | None = None,
+    attachments: dict | None = None,
 ) -> None:
     """
     Invoke agent and print raw streaming events in real-time.
@@ -218,11 +314,13 @@ def invoke_agent(
             the real Cognito JWT carries the user identity, user_id is never sent
             in the payload to prevent prompt injection impersonation.
         headers (Optional[Dict[str, str]]): Optional HTTP headers
+        attachments (Optional[dict]): Document/claims payload fields from the CLI
     """
     payload = {
         "prompt": prompt,
         "runtimeSessionId": session_id,
     }
+    payload.update(attachments or {})
 
     if headers is None:
         # Local mode: generate a mock JWT so the agent can extract user_id
@@ -311,28 +409,45 @@ def invoke_agent(
         print(f"Error: {e}")
 
 
-def run_chat(local_mode: bool, config: dict[str, str]) -> None:
+def run_chat(
+    local_mode: bool,
+    config: dict[str, str],
+    attachments: dict | None = None,
+    single_prompt: str | None = None,
+) -> None:
     """
-    Run interactive chat session.
+    Run interactive chat session, or a single invocation when a prompt is given.
 
     Args:
         local_mode (bool): Whether to use local mode
         config (Dict[str, str]): Configuration dictionary
+        attachments (Optional[dict]): Document/claims payload fields from the CLI
+        single_prompt (Optional[str]): Send this prompt once and return, no chat loop
     """
     session_id = generate_session_id()
+    # Attachments are sent with the first invocation only: the agent OCRs them into the
+    # session folder once, and later turns work off that markdown
+    pending_attachments = dict(attachments or {})
 
     print_section("Interactive Agent Chat")
     print(f"Session ID: {session_id}")
     print(
         f"Mode: {'Local (localhost:8080)' if local_mode else 'Remote (deployed agent)'}"
     )
-    print(
-        f"\n{Fore.YELLOW}💡 Type 'exit' or 'quit' to end, or press Ctrl+C{Style.RESET_ALL}\n"
-    )
+    for field, value in pending_attachments.items():
+        print(f"{field}: {value}")
+    if not single_prompt:
+        print(
+            f"\n{Fore.YELLOW}💡 Type 'exit' or 'quit' to end, or press Ctrl+C{Style.RESET_ALL}\n"
+        )
 
     while True:
         try:
-            prompt = input(f"{Fore.CYAN}You:{Style.RESET_ALL} ").strip()
+            if single_prompt:
+                prompt = single_prompt.strip()
+                print(f"{Fore.CYAN}You:{Style.RESET_ALL} {prompt}")
+            else:
+                prompt = input(f"{Fore.CYAN}You:{Style.RESET_ALL} ").strip()
 
             if not prompt:
                 continue
@@ -343,6 +458,8 @@ def run_chat(local_mode: bool, config: dict[str, str]) -> None:
 
             # Invoke agent
             start_time = time.time()
+            turn_attachments = pending_attachments
+            pending_attachments = {}
 
             if local_mode:
                 # Local mode
@@ -351,6 +468,7 @@ def run_chat(local_mode: bool, config: dict[str, str]) -> None:
                     prompt=prompt,
                     session_id=session_id,
                     user_id="local-test-user",
+                    attachments=turn_attachments,
                 )
             else:
                 # Remote mode
@@ -369,10 +487,14 @@ def run_chat(local_mode: bool, config: dict[str, str]) -> None:
                     prompt=prompt,
                     session_id=session_id,
                     headers=headers,
+                    attachments=turn_attachments,
                 )
 
             elapsed = time.time() - start_time
             print(f"\n{Fore.CYAN}[Completed in {elapsed:.2f}s]{Style.RESET_ALL}\n")
+
+            if single_prompt:
+                break
 
         except KeyboardInterrupt:
             print(f"\n\n{Fore.GREEN}Goodbye!{Style.RESET_ALL}")
@@ -403,11 +525,18 @@ Examples:
   # Override pattern for local testing
   uv run scripts/test-agent.py --local --pattern medical-content-review
 
+  # A full medical content review without the UI
+  uv run scripts/test-agent.py --content-pdf ./brochure.pdf \\
+      --reference ./dossier.pdf --claims ./approved_claims.xlsx \\
+      --prompt "Review this content and produce a detailed report"
+
 Notes:
   - Remote mode: Tests deployed agent
   - Local mode: Pattern read from infra-cdk/config.yaml to start correct agent
   - Use --pattern to override the config value for local testing
-  - Always runs in interactive conversation mode
+  - Interactive by default; --prompt sends one message and exits
+  - Local file arguments are uploaded to the staging bucket's uploads/ prefix, which
+    is the only prefix the agent's role may read; s3:// URIs are passed through
         """,
     )
 
@@ -421,6 +550,41 @@ Notes:
         "--pattern",
         type=str,
         help="Override agent pattern from config (e.g., 'medical-content-review')",
+    )
+
+    parser.add_argument(
+        "--content-pdf",
+        type=str,
+        help="Medical content document to review (local path or s3:// URI)",
+    )
+
+    parser.add_argument(
+        "--reference",
+        type=str,
+        action="append",
+        default=[],
+        help="Reference material to verify claims against (repeatable)",
+    )
+
+    parser.add_argument(
+        "--claims",
+        type=str,
+        help="Pre-approved claims spreadsheet (.xlsx/.xlsm/.csv), enabling claim matching",
+    )
+
+    parser.add_argument(
+        "--enabled-sources",
+        type=str,
+        help=(
+            "Comma-separated external sources (pubmed,openfda,clinicaltrials,nova); "
+            "pass an empty string to disable external evidence"
+        ),
+    )
+
+    parser.add_argument(
+        "--prompt",
+        type=str,
+        help="Send a single prompt and exit instead of starting an interactive chat",
     )
 
     return parser.parse_args()
@@ -507,8 +671,17 @@ def main():
         print(f"\nRuntime ARN: {runtime_arn}")
         print(f"Region: {region}\n")
 
-    # Run interactive chat
-    run_chat(args.local, config)
+    # Upload any local documents before the first invocation, so the payload only ever
+    # carries s3:// URIs
+    attachments: dict = {}
+    if args.content_pdf or args.reference or args.claims or args.enabled_sources:
+        print_section("Attachments")
+        attachments = build_attachments(
+            args, stack_cfg["outputs"].get("StagingBucketName", "")
+        )
+
+    # Run interactive chat, or a single invocation when --prompt was given
+    run_chat(args.local, config, attachments, args.prompt)
 
 
 if __name__ == "__main__":

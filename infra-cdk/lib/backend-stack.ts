@@ -348,6 +348,7 @@ export class BackendStack extends cdk.NestedStack {
     //   - uploads/*   read  (user-uploaded PDFs)
     //   - markdowns/* read+write  (process_pdf + batch_content outputs)
     //   - reviews/*   read+write  (per-batch reviewer JSONs, aggregated review, review_results.json)
+    //   - claims/*    read+write  (parsed claims library, extracted + matched claims, claims report)
     //   - reports/*   read+write  (retained from earlier report-upload flow)
     agentRole.addToPrincipalPolicy(
       new iam.PolicyStatement({
@@ -363,6 +364,7 @@ export class BackendStack extends cdk.NestedStack {
         resources: [
           `arn:aws:s3:::${this.stagingBucketName}/markdowns/*`,
           `arn:aws:s3:::${this.stagingBucketName}/reviews/*`,
+          `arn:aws:s3:::${this.stagingBucketName}/claims/*`,
           `arn:aws:s3:::${this.stagingBucketName}/reports/*`,
         ],
       })
@@ -374,7 +376,7 @@ export class BackendStack extends cdk.NestedStack {
         resources: [`arn:aws:s3:::${this.stagingBucketName}`],
         conditions: {
           StringLike: {
-            "s3:prefix": ["reviews/*", "markdowns/*"],
+            "s3:prefix": ["reviews/*", "markdowns/*", "claims/*"],
           },
         },
       })
@@ -640,18 +642,33 @@ export class BackendStack extends cdk.NestedStack {
       requestValidator: requestValidator,
     })
 
+    // The upload API also parses the pre-approved claims spreadsheet, so the UI can
+    // preview it before the review starts. It must read the file exactly as the agent
+    // does, so the parser has a single source: it is copied into the Lambda asset at
+    // synth time instead of being duplicated by hand. Two copies would drift, and the
+    // preview would then show something other than what the matcher used.
+    const uploadEntry = path.join(__dirname, "..", "lambdas", "upload")
+    const uploadPattern = config.backend?.pattern || "medical-content-review"
+    fs.copyFileSync(
+      // nosemgrep: path-join-resolve-traversal -- build-time path from validated config
+      path.join(__dirname, "..", "..", "patterns", uploadPattern, "tools", "claims_parser.py"),
+      path.join(uploadEntry, "claims_parser.py")
+    )
+
     // Create upload Lambda for pre-signed S3 URLs
     const uploadLambda = new PythonFunction(this, "UploadLambda", {
       functionName: `${config.stack_name_base}-upload`,
       runtime: lambda.Runtime.PYTHON_3_13,
       tracing: lambda.Tracing.ACTIVE,
-      entry: path.join(__dirname, "..", "lambdas", "upload"),
+      entry: uploadEntry,
       handler: "handler",
       environment: {
         BUCKET_NAME: this.stagingBucketName,
         CORS_ALLOWED_ORIGINS: `${frontendUrl},http://localhost:3000`,
       },
-      timeout: cdk.Duration.seconds(10),
+      // Reading and parsing a claims workbook needs more than a pre-signed URL does
+      memorySize: 512,
+      timeout: cdk.Duration.seconds(30),
       layers: [
         lambda.LayerVersion.fromLayerVersionArn(
           this,
@@ -670,12 +687,24 @@ export class BackendStack extends cdk.NestedStack {
 
     // Grant upload Lambda permission to put objects in staging bucket
     this.stagingBucket.grantPut(uploadLambda)
+    // /claims/parse reads back the spreadsheet it just handed out an upload URL for.
+    // Scoped to uploads/, which is the only prefix the endpoint accepts.
+    this.stagingBucket.grantRead(uploadLambda, "uploads/*")
 
     this.addLambdaAlarms(uploadLambda, "Upload")
 
     // Create /upload resource and POST method
     const uploadResource = api.root.addResource("upload")
     uploadResource.addMethod("POST", new apigateway.LambdaIntegration(uploadLambda), {
+      authorizer,
+      authorizationType: apigateway.AuthorizationType.COGNITO,
+      requestValidator: requestValidator,
+    })
+
+    // Create /claims/parse resource and POST method — parses an uploaded claims
+    // spreadsheet so the UI can preview it before the review starts
+    const claimsParseResource = api.root.addResource("claims").addResource("parse")
+    claimsParseResource.addMethod("POST", new apigateway.LambdaIntegration(uploadLambda), {
       authorizer,
       authorizationType: apigateway.AuthorizationType.COGNITO,
       requestValidator: requestValidator,

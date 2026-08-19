@@ -8,6 +8,8 @@ from strands import tool
 from reviewers._common import (
     FINDINGS_SCHEMA_HINT,
     batch_stem,
+    build_claims_context,
+    claims_workflow_error,
     load_prompt,
     parse_s3_uri,
     read_s3_text,
@@ -25,6 +27,7 @@ def run_internal_review(
     batch_md_s3_uri: str,
     session_id: str,
     reference_md_uris: list[str],
+    matched_claims_s3_uri: str = "",
 ) -> str:
     """Run the internal-reference reviewer on one batch markdown and save to S3.
 
@@ -41,12 +44,21 @@ def run_internal_review(
     reference_md_uris : list[str]
         S3 URIs of the reference markdown files (also produced by `process_pdf`).
         The reviewer is allowed to read any subset of these.
+    matched_claims_s3_uri : str
+        S3 URI of this batch's `matched_claims` file from `match_claims`, when a
+        pre-approved claims library was provided. Claims already approved verbatim
+        are excluded from this review; unmatched claims are prioritised.
 
     Returns
     -------
     str
-        S3 URI of the written findings JSON.
+        S3 URI of the written findings JSON, or an error asking for the claims
+        workflow when the review has a claims library and none was passed.
     """
+    skipped = claims_workflow_error(session_id, matched_claims_s3_uri, batch_md_s3_uri)
+    if skipped:
+        return skipped
+
     content_md = read_s3_text(batch_md_s3_uri)
     allow_set = set(reference_md_uris or [])
 
@@ -66,7 +78,9 @@ def run_internal_review(
         else "- (no references attached — output <findings>[]</findings>)"
     )
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
-        ref_list=ref_list, schema=FINDINGS_SCHEMA_HINT
+        ref_list=ref_list,
+        claims_context=build_claims_context(matched_claims_s3_uri),
+        schema=FINDINGS_SCHEMA_HINT,
     )
     findings = run_inner_agent(
         system_prompt=system_prompt,

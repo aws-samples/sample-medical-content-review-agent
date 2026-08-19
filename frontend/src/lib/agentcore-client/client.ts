@@ -43,6 +43,8 @@ export class AgentCoreClient {
     referenceUris?: string[],
     contentPdfName?: string,
     referenceNames?: string[],
+    claimsUri?: string,
+    claimsName?: string,
   ): Promise<void> {
     if (!accessToken) throw new Error("No valid access token found.");
     if (!this.runtimeArn) throw new Error("Agent Runtime ARN not configured.");
@@ -81,6 +83,15 @@ export class AgentCoreClient {
     }
     if (referenceNames && referenceNames.length > 0) {
       payload.referenceNames = referenceNames;
+    }
+
+    // Pre-approved claims library (optional). When absent, the backend does not
+    // expose the claims tools at all and the claim-matching steps are skipped.
+    if (claimsUri) {
+      payload.claimsUri = claimsUri;
+    }
+    if (claimsName) {
+      payload.claimsName = claimsName;
     }
 
     // User identity is extracted server-side from the validated JWT token

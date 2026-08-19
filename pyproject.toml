@@ -69,7 +69,7 @@ ignore = ["S101", "S603", "S607"]                                    # Allow ass
 "gateway/tools/*/lambda.py" = ["S310"]  # Gateway tools use trusted API URLs
 "gateway/tools/*/*.py" = ["S310"]  # Gateway tools use trusted API URLs
 "test-scripts/test_tavily_local.py" = ["S310"]  # Tavily API URL is trusted
-"patterns/*/*.py" = ["T201"]  # Allow print statements for agent logging
+"patterns/**/*.py" = ["T201"]  # Allow print statements for agent logging
 "scripts/*.py" = ["T201", "UP036", "E501"]  # Allow print statements in CLI scripts
 
 [tool.mypy]

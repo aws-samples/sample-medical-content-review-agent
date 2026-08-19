@@ -14,6 +14,47 @@ export interface ReviewIssue {
   source: string;
   type: string;
   score: number;
+  // Set when the finding is about a claim that was checked against the
+  // pre-approved claims library ("" / undefined when it was not)
+  claim_match?: string;
+  claim_id?: string;
+  // Which kind of exact match it is: "verbatim", "reordered", or "" for the rest
+  claim_precision?: string;
+}
+
+export type ClaimMatchStatus = "exact" | "partial" | "none";
+
+// An exact match is either the approved copy as written, or the same words rearranged
+export type MatchPrecision = "verbatim" | "reordered";
+
+export interface ClaimMatch {
+  claim_ref: string;
+  page: number;
+  text: string;
+  claim_type: string;
+  match_status: ClaimMatchStatus;
+  match_precision?: string;
+  matched_claim_id: string;
+  matched_claim_text: string;
+  library_status: string;
+  library_claim_usable: boolean | null;
+  deviation: string;
+  unusable_reason: string;
+  requires_verification: boolean;
+}
+
+export interface ClaimsReport {
+  total_claims: number;
+  counts: Record<ClaimMatchStatus, number>;
+  requires_verification: number;
+  claims: ClaimMatch[];
+}
+
+export interface Phase {
+  icon: string;
+  text: string;
+  // Bare tool names (gateway prefix stripped) that count towards this phase
+  tools: string[];
 }
 
 export interface ActivityEntry {
@@ -21,20 +62,42 @@ export interface ActivityEntry {
   icon: string;
   label: string;
   detail?: string;
-  status: "running" | "done";
+  status: "running" | "done" | "error";
   output?: string;
+}
+
+// One row of the parsed pre-approved claims library, as `load_claims_library` writes it
+export interface ClaimsLibraryEntry {
+  claim_id: string;
+  claim_text: string;
+  claim_type?: string;
+  status?: string;
+  approved_date?: string;
+  expiry_date?: string;
+  reference?: string;
+  restrictions?: string;
+  job_code?: string;
 }
 
 export interface PreviewDoc {
   name: string;
-  url: string;
-  kind: "content" | "reference";
+  // Blob or pre-signed URL of a PDF; absent for the claims library, which is rendered
+  // as a table rather than embedded
+  url?: string;
+  kind: "content" | "reference" | "claims";
+  claims?: ClaimsLibraryEntry[];
+  // Which spreadsheet column the parser read each field from, and the columns it kept
+  // as-is. Shown above the table so a guessed header is visible rather than implied.
+  columnMapping?: Record<string, string>;
+  unmappedColumns?: string[];
 }
 
 interface ReviewResultsPanelProps {
   issues: ReviewIssue[];
+  claimsReport?: ClaimsReport | null;
   isLoading: boolean;
   activityLog?: ActivityEntry[];
+  phases?: Phase[];
   phaseStarted?: number[];
   phaseDone?: number[];
   startedAt?: number | null;
@@ -43,13 +106,137 @@ interface ReviewResultsPanelProps {
   onNewReview: () => void;
 }
 
-const PHASES: { icon: string; text: string }[] = [
-  { icon: "📄", text: "Reading documents" },
-  { icon: "✂️", text: "Splitting into batches" },
-  { icon: "🔍", text: "Running reviewers in parallel" },
-  { icon: "🧩", text: "Merging reviewer findings" },
-  { icon: "✅", text: "Writing final report" },
+// Fallback phase list for a run without a pre-approved claims library. The caller
+// normally passes the phase list it actually used.
+const DEFAULT_PHASES: Phase[] = [
+  { icon: "📄", text: "Reading documents", tools: ["process_pdf"] },
+  { icon: "✂️", text: "Splitting into batches", tools: ["batch_content"] },
+  { icon: "🔍", text: "Running reviewers in parallel", tools: [] },
+  { icon: "🧩", text: "Merging reviewer findings", tools: ["get_reviews"] },
+  { icon: "✅", text: "Writing final report", tools: ["file_write"] },
 ];
+
+const CLAIM_MATCH_LABELS: Record<ClaimMatchStatus, string> = {
+  exact: "Exact match",
+  partial: "Partial match",
+  none: "No match",
+};
+
+// Only an exact match is qualified: verbatim reuse needs no note, rearranged copy does
+const MATCH_PRECISION_LABELS: Record<MatchPrecision, string> = {
+  verbatim: "verbatim",
+  reordered: "reordered",
+};
+
+const CLAIM_MATCH_BADGES: Record<ClaimMatchStatus, string> = {
+  exact: "bg-green-100 text-green-800 border-green-300",
+  partial: "bg-amber-100 text-amber-900 border-amber-300",
+  none: "bg-slate-100 text-slate-700 border-slate-300",
+};
+
+// One-liners for the compact counts shown while the review is still running
+const CLAIM_MATCH_TOOLTIPS: Record<ClaimMatchStatus, string> = {
+  exact:
+    "The approved wording, verbatim or with the same words reordered — already cleared by a human, so it is not checked again",
+  partial:
+    "The same assertion as an approved claim but with deviating wording, so the approval does not carry over — verified like an unapproved claim",
+  none: "Not covered by the claims library — not a violation, but verified against the references and external sources instead",
+};
+
+// The full definitions, shown next to the counts so the panel explains its own tags.
+// The wording mirrors what the matcher actually does.
+const CLAIM_MATCH_DEFINITIONS: {
+  label: string;
+  badge: string;
+  text: string;
+}[] = [
+  {
+    label: "Exact match · verbatim",
+    badge: CLAIM_MATCH_BADGES.exact,
+    text: "Word for word the approved claim, ignoring typography only (quotes, dashes, spacing, capitalisation). A human already cleared this exact wording, so it needs no further substantiation.",
+  },
+  {
+    label: "Exact match · reordered",
+    badge: CLAIM_MATCH_BADGES.exact,
+    text: "Exactly the same words as the approved claim, in a different order — approved copy that was re-laid-out. Also treated as approved, with the rearrangement recorded in the report.",
+  },
+  {
+    label: "Partial match",
+    badge: CLAIM_MATCH_BADGES.partial,
+    text: "Makes the same assertion as an approved claim, but the wording deviates, so the approval does not carry over. The deviation is recorded and the claim is verified like an unapproved one.",
+  },
+  {
+    label: "No match",
+    badge: CLAIM_MATCH_BADGES.none,
+    text: "Not covered by the claims library. This is not a violation in itself: the library being silent about a claim says nothing about whether it is true, so the claim is checked against the references and external sources instead.",
+  },
+];
+
+// Why the tags can be trusted, and the one case where an exact match is still flagged
+function ClaimMatchLegend() {
+  return (
+    <details className="rounded-xl border border-gray-200 bg-gray-50 mb-4">
+      <summary className="cursor-pointer select-none px-4 py-2.5 text-xs font-semibold text-gray-600 uppercase tracking-wide">
+        How these tags are decided
+      </summary>
+      <div className="px-4 pb-3 space-y-2">
+        {CLAIM_MATCH_DEFINITIONS.map((definition) => (
+          <div key={definition.label} className="flex items-start gap-2">
+            <span
+              className={`text-[10px] font-bold px-2 py-0.5 rounded-full border whitespace-nowrap ${definition.badge}`}
+            >
+              {definition.label}
+            </span>
+            <p className="text-xs text-gray-600 flex-1">{definition.text}</p>
+          </div>
+        ))}
+        <p className="text-xs text-gray-500 pt-1 border-t border-gray-200 mt-2">
+          Both exact tags are decided in Python by comparing the words
+          themselves, never by a model, because an exact match is the only tag
+          that lets a claim skip verification. An exact match against a library
+          claim that is withdrawn, expired, superseded, or still in draft is
+          reported as an issue regardless. Nothing in this review is ever
+          written back to the claims library.
+        </p>
+      </div>
+    </details>
+  );
+}
+
+function isClaimMatchStatus(value: unknown): value is ClaimMatchStatus {
+  return value === "exact" || value === "partial" || value === "none";
+}
+
+function isMatchPrecision(value: unknown): value is MatchPrecision {
+  return value === "verbatim" || value === "reordered";
+}
+
+// Small pill showing a claim's match status, the kind of exact match it is, and the
+// approved claim id if any
+function ClaimMatchBadge({
+  status,
+  claimId,
+  precision,
+}: {
+  status: ClaimMatchStatus;
+  claimId?: string;
+  precision?: string;
+}) {
+  const qualifier =
+    status === "exact" && isMatchPrecision(precision)
+      ? ` (${MATCH_PRECISION_LABELS[precision]})`
+      : "";
+  return (
+    <span
+      className={`text-[10px] font-bold px-2 py-0.5 rounded-full border cursor-help ${CLAIM_MATCH_BADGES[status]}`}
+      title={CLAIM_MATCH_TOOLTIPS[status]}
+    >
+      {CLAIM_MATCH_LABELS[status]}
+      {qualifier}
+      {claimId ? ` · ${claimId}` : ""}
+    </span>
+  );
+}
 
 function formatElapsed(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -68,6 +255,148 @@ function ElapsedTimer({ startedAt }: { startedAt: number }) {
     <span className="tabular-nums font-mono text-indigo-600 font-bold">
       {formatElapsed(now - startedAt)}
     </span>
+  );
+}
+
+const PREVIEW_KIND_LABELS: Record<PreviewDoc["kind"], string> = {
+  content: "Medical content",
+  reference: "Reference",
+  claims: "Pre-approved claims library",
+};
+
+const PREVIEW_KIND_ICONS: Record<PreviewDoc["kind"], string> = {
+  content: "📄",
+  reference: "📎",
+  claims: "📗",
+};
+
+// Library statuses that mean the claim may not be reused as-is, mirroring the matcher
+const UNUSABLE_LIBRARY_STATUSES = [
+  "withdrawn",
+  "retired",
+  "rejected",
+  "expired",
+  "superseded",
+  "draft",
+  "pending",
+  "in review",
+];
+
+// Canonical field -> the label used in the mapping note, in display order
+const CLAIMS_FIELD_LABELS: Record<string, string> = {
+  claim_id: "ID",
+  claim_text: "Approved claim",
+  claim_type: "Type",
+  status: "Status",
+  expiry_date: "Expiry",
+  approved_date: "Approved",
+  reference: "Reference",
+  restrictions: "Restrictions",
+};
+
+// The claims library is a spreadsheet, so it gets a table instead of an embedded
+// viewer. It shows what the review was matched against, exactly as the parser read it.
+export function ClaimsLibraryPreview({
+  claims,
+  columnMapping,
+  unmappedColumns,
+}: {
+  claims: ClaimsLibraryEntry[];
+  columnMapping?: Record<string, string>;
+  unmappedColumns?: string[];
+}) {
+  if (claims.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <p className="text-gray-400">No approved claims parsed</p>
+      </div>
+    );
+  }
+  const mapped = Object.entries(columnMapping || {}).filter(
+    ([, header]) => !!header,
+  );
+  return (
+    <div className="h-full overflow-auto">
+      {mapped.length > 0 && (
+        <div className="px-3 py-2 bg-indigo-50 border-b border-indigo-100 text-[10px] text-indigo-900">
+          <span className="font-semibold">Columns read as: </span>
+          {mapped
+            .map(
+              ([field, header]) =>
+                `${header} → ${CLAIMS_FIELD_LABELS[field] || field}`,
+            )
+            .join(", ")}
+          {unmappedColumns && unmappedColumns.length > 0 && (
+            <span className="text-indigo-700">
+              {" · kept as extra: "}
+              {unmappedColumns.join(", ")}
+            </span>
+          )}
+        </div>
+      )}
+      <table className="w-full text-xs border-collapse">
+        <thead className="sticky top-0 bg-gray-50 text-gray-600 uppercase tracking-wide text-[10px]">
+          <tr>
+            <th className="text-left font-semibold px-3 py-2 border-b border-gray-200">
+              ID
+            </th>
+            <th className="text-left font-semibold px-3 py-2 border-b border-gray-200">
+              Approved claim
+            </th>
+            <th className="text-left font-semibold px-3 py-2 border-b border-gray-200">
+              Type
+            </th>
+            <th className="text-left font-semibold px-3 py-2 border-b border-gray-200">
+              Status
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {claims.map((claim, idx) => {
+            const status = (claim.status || "Approved").trim();
+            const unusable = UNUSABLE_LIBRARY_STATUSES.includes(
+              status.toLowerCase(),
+            );
+            return (
+              <tr key={claim.claim_id || idx} className="align-top">
+                <td className="px-3 py-2 border-b border-gray-100 font-mono text-[10px] text-gray-500 whitespace-nowrap">
+                  {claim.claim_id}
+                </td>
+                <td className="px-3 py-2 border-b border-gray-100 text-gray-800">
+                  {claim.claim_text}
+                  {(claim.reference || claim.restrictions) && (
+                    <p className="text-[10px] text-gray-500 mt-1">
+                      {claim.reference}
+                      {claim.reference && claim.restrictions ? " — " : ""}
+                      {claim.restrictions}
+                    </p>
+                  )}
+                </td>
+                <td className="px-3 py-2 border-b border-gray-100 text-gray-600 whitespace-nowrap">
+                  {claim.claim_type || "—"}
+                </td>
+                <td className="px-3 py-2 border-b border-gray-100 whitespace-nowrap">
+                  <span
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                      unusable
+                        ? "bg-red-100 text-red-800 border-red-300"
+                        : "bg-green-100 text-green-800 border-green-300"
+                    }`}
+                  >
+                    {status}
+                  </span>
+                  {claim.expiry_date && (
+                    <p className="text-[10px] text-gray-500 mt-1">
+                      until {claim.expiry_date}
+                    </p>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -98,7 +427,7 @@ function DocumentPreviewHeader({
           {tabs[0].name}
         </h3>
         <p className="text-[11px] text-gray-500 uppercase tracking-wide">
-          {tabs[0].kind === "content" ? "Medical content" : "Reference"}
+          {PREVIEW_KIND_LABELS[tabs[0].kind]}
         </p>
       </div>
     );
@@ -122,7 +451,7 @@ function DocumentPreviewHeader({
               title={tab.name}
             >
               <span className="text-sm leading-none">
-                {tab.kind === "content" ? "📄" : "📎"}
+                {PREVIEW_KIND_ICONS[tab.kind]}
               </span>
               <span className="truncate">{tab.name}</span>
             </button>
@@ -149,8 +478,10 @@ function getSeverityBadge(score: number) {
 
 export function ReviewResultsPanel({
   issues,
+  claimsReport = null,
   isLoading,
   activityLog = [],
+  phases = DEFAULT_PHASES,
   phaseStarted = [0, 0, 0, 0, 0],
   phaseDone = [0, 0, 0, 0, 0],
   startedAt = null,
@@ -173,8 +504,10 @@ export function ReviewResultsPanel({
     return [];
   }, [previewDocs, documentUrl]);
 
-  const activeDocUrl = previewTabs[activePreviewIdx]?.url ?? null;
-  const isContentActive = previewTabs[activePreviewIdx]?.kind === "content";
+  const activeTab = previewTabs[activePreviewIdx] ?? null;
+  const activeDocUrl = activeTab?.url ?? null;
+  const activeClaims = activeTab?.kind === "claims" ? activeTab.claims : null;
+  const isContentActive = activeTab?.kind === "content";
 
   useEffect(() => {
     const el = activityScrollRef.current;
@@ -223,7 +556,13 @@ export function ReviewResultsPanel({
                 onSelect={setActivePreviewIdx}
               />
               <div className="flex-1 overflow-hidden">
-                {activeDocUrl ? (
+                {activeClaims ? (
+                  <ClaimsLibraryPreview
+                    claims={activeClaims}
+                    columnMapping={activeTab?.columnMapping}
+                    unmappedColumns={activeTab?.unmappedColumns}
+                  />
+                ) : activeDocUrl ? (
                   <iframe
                     src={activeDocUrl}
                     className="w-full h-full"
@@ -267,13 +606,13 @@ export function ReviewResultsPanel({
                     // A later phase can't be marked done before earlier ones have completed,
                     // even if one of its tools happens to return first.
                     let lastDoneIdx = -1;
-                    for (let i = 0; i < PHASES.length; i++) {
+                    for (let i = 0; i < phases.length; i++) {
                       const s = phaseStarted[i] ?? 0;
                       const d = phaseDone[i] ?? 0;
                       if (s > 0 && s === d) lastDoneIdx = i;
                       else break;
                     }
-                    return PHASES.map((step, idx) => {
+                    return phases.map((step, idx) => {
                       const started = phaseStarted[idx] ?? 0;
                       const done = phaseDone[idx] ?? 0;
                       const isDone = idx <= lastDoneIdx;
@@ -338,6 +677,55 @@ export function ReviewResultsPanel({
                   })()}
                 </div>
 
+                {/* Claim-match summary — published before the reviewers finish */}
+                {claimsReport && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <p className="text-xs font-semibold text-amber-900 uppercase tracking-wide">
+                        Pre-approved claims
+                      </p>
+                      <p className="text-xs text-amber-800">
+                        {claimsReport.total_claims} claims extracted
+                      </p>
+                    </div>
+                    {/* The counts carry their definition, so a tag is never just a
+                        colour — the full legend sits in the results panel */}
+                    <div className="flex gap-3 text-xs text-gray-700">
+                      <span
+                        className="cursor-help underline decoration-dotted decoration-gray-400"
+                        title={CLAIM_MATCH_TOOLTIPS.exact}
+                      >
+                        <strong className="text-green-700">
+                          {claimsReport.counts.exact}
+                        </strong>{" "}
+                        exact
+                      </span>
+                      <span
+                        className="cursor-help underline decoration-dotted decoration-gray-400"
+                        title={CLAIM_MATCH_TOOLTIPS.partial}
+                      >
+                        <strong className="text-amber-700">
+                          {claimsReport.counts.partial}
+                        </strong>{" "}
+                        partial
+                      </span>
+                      <span
+                        className="cursor-help underline decoration-dotted decoration-gray-400"
+                        title={CLAIM_MATCH_TOOLTIPS.none}
+                      >
+                        <strong className="text-slate-700">
+                          {claimsReport.counts.none}
+                        </strong>{" "}
+                        no match
+                      </span>
+                      <span className="ml-auto text-gray-500">
+                        {claimsReport.requires_verification} still being
+                        verified
+                      </span>
+                    </div>
+                  </div>
+                )}
+
                 {/* Live activity timeline */}
                 <div className="flex-1 flex flex-col min-h-0">
                   <div className="flex items-center justify-between mb-2">
@@ -358,14 +746,32 @@ export function ReviewResultsPanel({
                       </p>
                     ) : (
                       activityLog.map((entry, idx) => {
-                        const rowClass = `text-xs rounded px-2 py-1.5 bg-white border ${
+                        const rowClass = `text-xs rounded px-2 py-1.5 border ${
                           entry.status === "running"
-                            ? "border-indigo-200"
-                            : "border-gray-200"
+                            ? "bg-white border-indigo-200"
+                            : entry.status === "error"
+                            ? "bg-red-50 border-red-300"
+                            : "bg-white border-gray-200"
                         }`;
+                        // A failed tool call must not look like a completed one: the
+                        // agent may carry on without it, and the user has to see that
                         const statusBadge =
                           entry.status === "running" ? (
                             <span className="inline-block w-3 h-3 rounded-full border-2 border-indigo-600 border-t-transparent animate-spin mt-0.5 shrink-0" />
+                          ) : entry.status === "error" ? (
+                            <svg
+                              className="w-3.5 h-3.5 text-red-600 mt-0.5 shrink-0"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={3}
+                                d="M6 18L18 6M6 6l12 12"
+                              />
+                            </svg>
                           ) : (
                             <svg
                               className="w-3.5 h-3.5 text-green-600 mt-0.5 shrink-0"
@@ -394,6 +800,8 @@ export function ReviewResultsPanel({
                                 className={`${
                                   entry.status === "running"
                                     ? "text-indigo-900 font-semibold"
+                                    : entry.status === "error"
+                                    ? "text-red-800 font-semibold"
                                     : "text-gray-700"
                                 }`}
                               >
@@ -474,6 +882,13 @@ export function ReviewResultsPanel({
           <p className="text-gray-600 mb-6">
             No issues were detected in your document.
           </p>
+          {claimsReport && (
+            <p className="text-sm text-gray-500 mb-6">
+              {claimsReport.total_claims} claims extracted —{" "}
+              {claimsReport.counts.exact} exact, {claimsReport.counts.partial}{" "}
+              partial, {claimsReport.counts.none} with no pre-approved match.
+            </p>
+          )}
           <button
             onClick={onNewReview}
             className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-lg transition-colors"
@@ -584,6 +999,129 @@ export function ReviewResultsPanel({
           </div>
         </div>
 
+        {/* Pre-approved claims matching */}
+        {claimsReport && (
+          <details
+            open
+            className="bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden mb-6 group"
+          >
+            <summary className="bg-gradient-to-r from-amber-50 to-yellow-50 px-6 py-4 border-b border-gray-200 cursor-pointer select-none list-none flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">
+                  Pre-Approved Claims Matching
+                </h3>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {claimsReport.total_claims} claims extracted ·{" "}
+                  {claimsReport.counts.exact} exact ·{" "}
+                  {claimsReport.counts.partial} partial ·{" "}
+                  {claimsReport.counts.none} no match
+                </p>
+              </div>
+              <svg
+                className="w-5 h-5 text-gray-500 transition-transform group-open:rotate-90"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2.5}
+                  d="M9 5l7 7-7 7"
+                />
+              </svg>
+            </summary>
+            <div className="p-4">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+                <div className="rounded-xl border border-gray-200 p-4 text-center">
+                  <p className="text-3xl font-bold text-indigo-600">
+                    {claimsReport.total_claims}
+                  </p>
+                  <p className="text-xs font-semibold text-gray-600 mt-1">
+                    Claims Extracted
+                  </p>
+                </div>
+                <div className="rounded-xl border border-green-200 p-4 text-center">
+                  <p className="text-3xl font-bold text-green-600">
+                    {claimsReport.counts.exact}
+                  </p>
+                  <p className="text-xs font-semibold text-gray-600 mt-1">
+                    Exact Match
+                  </p>
+                </div>
+                <div className="rounded-xl border border-amber-200 p-4 text-center">
+                  <p className="text-3xl font-bold text-amber-600">
+                    {claimsReport.counts.partial}
+                  </p>
+                  <p className="text-xs font-semibold text-gray-600 mt-1">
+                    Partial Match
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-200 p-4 text-center">
+                  <p className="text-3xl font-bold text-slate-600">
+                    {claimsReport.counts.none}
+                  </p>
+                  <p className="text-xs font-semibold text-gray-600 mt-1">
+                    No Match — Verified Elsewhere
+                  </p>
+                </div>
+              </div>
+              <ClaimMatchLegend />
+              <div className="max-h-80 overflow-y-auto space-y-2">
+                {claimsReport.claims.map((claim) => (
+                  <div
+                    key={claim.claim_ref}
+                    className="border border-gray-200 rounded-lg px-3 py-2"
+                  >
+                    <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                      <span className="text-[10px] font-bold bg-gray-800 text-white px-2 py-0.5 rounded-full">
+                        Page {claim.page}
+                      </span>
+                      {isClaimMatchStatus(claim.match_status) && (
+                        <ClaimMatchBadge
+                          status={claim.match_status}
+                          claimId={claim.matched_claim_id}
+                          precision={claim.match_precision}
+                        />
+                      )}
+                      {claim.claim_type && (
+                        <span className="text-[10px] text-gray-500 uppercase tracking-wide">
+                          {claim.claim_type.replace(/_/g, " ")}
+                        </span>
+                      )}
+                      {claim.library_claim_usable === false && (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-red-100 text-red-800 border-red-300">
+                          {claim.library_status || "Not usable"}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-800 italic">
+                      &ldquo;{claim.text}&rdquo;
+                    </p>
+                    {claim.deviation && (
+                      <p className="text-xs text-amber-800 mt-1">
+                        <strong>Deviation:</strong> {claim.deviation}
+                      </p>
+                    )}
+                    {claim.matched_claim_text && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        <strong>Approved wording:</strong> &ldquo;
+                        {claim.matched_claim_text}&rdquo;
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-gray-500 mt-3">
+                Claims with no pre-approved match are not violations — they
+                carry the tag so you can see they were verified against the
+                references and external sources instead. The claims library
+                itself is never modified by this review.
+              </p>
+            </div>
+          </details>
+        )}
+
         {/* Split-Pane: PDF left, Issues right */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Left: Document Preview (with tabs for content + references) */}
@@ -594,7 +1132,13 @@ export function ReviewResultsPanel({
               onSelect={setActivePreviewIdx}
             />
             <div className="h-[800px] overflow-hidden">
-              {activeDocUrl ? (
+              {activeClaims ? (
+                <ClaimsLibraryPreview
+                  claims={activeClaims}
+                  columnMapping={activeTab?.columnMapping}
+                  unmappedColumns={activeTab?.unmappedColumns}
+                />
+              ) : activeDocUrl ? (
                 <iframe
                   src={
                     isContentActive
@@ -648,9 +1192,16 @@ export function ReviewResultsPanel({
                         {issue.score}/100
                       </span>
                     </div>
-                    <h4 className="font-bold text-gray-900 text-xs mb-2 flex items-center gap-1.5">
+                    <h4 className="font-bold text-gray-900 text-xs mb-2 flex items-center gap-1.5 flex-wrap">
                       <span className="text-base">⚠️</span>
                       {issue.type}
+                      {isClaimMatchStatus(issue.claim_match) && (
+                        <ClaimMatchBadge
+                          status={issue.claim_match}
+                          claimId={issue.claim_id}
+                          precision={issue.claim_precision}
+                        />
+                      )}
                     </h4>
                     <div className="bg-white bg-opacity-60 rounded p-2 mb-2">
                       <p className="text-xs text-gray-800 italic">
@@ -708,6 +1259,13 @@ export function ReviewResultsPanel({
                   >
                     Severity: {selectedIssue.score}/100
                   </span>
+                  {isClaimMatchStatus(selectedIssue.claim_match) && (
+                    <ClaimMatchBadge
+                      status={selectedIssue.claim_match}
+                      claimId={selectedIssue.claim_id}
+                      precision={selectedIssue.claim_precision}
+                    />
+                  )}
                 </div>
                 <h3 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
                   <span className="text-3xl">⚠️</span>

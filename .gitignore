@@ -43,3 +43,9 @@ Archive/
 MEDICAL_CONTENT_SOLU*
 frontend_old
 .srt/
+
+files/
+
+# Copied into the upload Lambda asset at synth time from
+# patterns/medical-content-review/tools/claims_parser.py — never edit it there
+infra-cdk/lambdas/upload/claims_parser.py

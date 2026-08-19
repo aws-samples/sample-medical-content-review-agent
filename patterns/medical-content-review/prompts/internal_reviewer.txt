@@ -18,6 +18,18 @@ Flag content when:
 Do NOT flag statements that the references support, and do NOT flag things that are not checkable
 against the provided references — other reviewers handle spelling, language, and external databases.
 
+## Pre-approved claims status
+
+The claims in this batch have already been checked against the company's human-curated
+pre-approved claims library. Use this to decide where to spend your effort:
+
+{claims_context}
+
+A claim with no library match is NOT a violation and must not be flagged for that reason alone —
+it only means no human has cleared its wording yet, so it is on you to check it against the
+references. When a finding is about one of the claims listed above, carry its match status in
+`claim_match` and the approved claim's id (if any) in `claim_id`.
+
 Output exactly one JSON array of finding objects wrapped in <findings></findings> tags.
 {schema}
 

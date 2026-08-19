@@ -69,6 +69,7 @@ export const parseStrandsChunk: ChunkParser = (line, callback) => {
               type: "tool_result",
               toolUseId: block.toolResult.toolUseId,
               result: resultText,
+              status: block.toolResult.status === "error" ? "error" : "success",
             });
           }
         }
