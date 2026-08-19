@@ -318,7 +318,7 @@ export function ClaimsLibraryPreview({
   return (
     <div className="h-full overflow-auto">
       {mapped.length > 0 && (
-        <div className="px-3 py-2 bg-indigo-50 border-b border-indigo-100 text-[10px] text-indigo-900">
+        <div className="px-3 py-2 bg-indigo-50 dark:bg-indigo-950/50 border-b border-indigo-100 dark:border-indigo-900 text-[10px] text-indigo-900 dark:text-indigo-200">
           <span className="font-semibold">Columns read as: </span>
           {mapped
             .map(
@@ -327,7 +327,7 @@ export function ClaimsLibraryPreview({
             )
             .join(", ")}
           {unmappedColumns && unmappedColumns.length > 0 && (
-            <span className="text-indigo-700">
+            <span className="text-indigo-700 dark:text-indigo-300">
               {" · kept as extra: "}
               {unmappedColumns.join(", ")}
             </span>
@@ -335,18 +335,18 @@ export function ClaimsLibraryPreview({
         </div>
       )}
       <table className="w-full text-xs border-collapse">
-        <thead className="sticky top-0 bg-gray-50 text-gray-600 uppercase tracking-wide text-[10px]">
+        <thead className="sticky top-0 bg-gray-50 dark:bg-gray-900 text-gray-600 dark:text-gray-400 uppercase tracking-wide text-[10px]">
           <tr>
-            <th className="text-left font-semibold px-3 py-2 border-b border-gray-200">
+            <th className="text-left font-semibold px-3 py-2 border-b border-gray-200 dark:border-gray-700">
               ID
             </th>
-            <th className="text-left font-semibold px-3 py-2 border-b border-gray-200">
+            <th className="text-left font-semibold px-3 py-2 border-b border-gray-200 dark:border-gray-700">
               Approved claim
             </th>
-            <th className="text-left font-semibold px-3 py-2 border-b border-gray-200">
+            <th className="text-left font-semibold px-3 py-2 border-b border-gray-200 dark:border-gray-700">
               Type
             </th>
-            <th className="text-left font-semibold px-3 py-2 border-b border-gray-200">
+            <th className="text-left font-semibold px-3 py-2 border-b border-gray-200 dark:border-gray-700">
               Status
             </th>
           </tr>
@@ -359,34 +359,34 @@ export function ClaimsLibraryPreview({
             );
             return (
               <tr key={claim.claim_id || idx} className="align-top">
-                <td className="px-3 py-2 border-b border-gray-100 font-mono text-[10px] text-gray-500 whitespace-nowrap">
+                <td className="px-3 py-2 border-b border-gray-100 dark:border-gray-700/60 font-mono text-[10px] text-gray-500 dark:text-gray-400 whitespace-nowrap">
                   {claim.claim_id}
                 </td>
-                <td className="px-3 py-2 border-b border-gray-100 text-gray-800">
+                <td className="px-3 py-2 border-b border-gray-100 dark:border-gray-700/60 text-gray-800 dark:text-gray-200">
                   {claim.claim_text}
                   {(claim.reference || claim.restrictions) && (
-                    <p className="text-[10px] text-gray-500 mt-1">
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">
                       {claim.reference}
                       {claim.reference && claim.restrictions ? " — " : ""}
                       {claim.restrictions}
                     </p>
                   )}
                 </td>
-                <td className="px-3 py-2 border-b border-gray-100 text-gray-600 whitespace-nowrap">
+                <td className="px-3 py-2 border-b border-gray-100 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 whitespace-nowrap">
                   {claim.claim_type || "—"}
                 </td>
-                <td className="px-3 py-2 border-b border-gray-100 whitespace-nowrap">
+                <td className="px-3 py-2 border-b border-gray-100 dark:border-gray-700/60 whitespace-nowrap">
                   <span
                     className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
                       unusable
-                        ? "bg-red-100 text-red-800 border-red-300"
-                        : "bg-green-100 text-green-800 border-green-300"
+                        ? "bg-red-100 text-red-800 border-red-300 dark:bg-red-950/60 dark:text-red-300 dark:border-red-800"
+                        : "bg-green-100 text-green-800 border-green-300 dark:bg-green-950/60 dark:text-green-300 dark:border-green-800"
                     }`}
                   >
                     {status}
                   </span>
                   {claim.expiry_date && (
-                    <p className="text-[10px] text-gray-500 mt-1">
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">
                       until {claim.expiry_date}
                     </p>
                   )}
