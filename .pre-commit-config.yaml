@@ -28,6 +28,8 @@ repos:
   - repo: https://github.com/crate-ci/typos
     rev: v1.44.0
     hooks:
+      # claim_tags.py is excluded because its comments spell words wrong on purpose, to
+      # show what the fuzzy matcher tolerates; "correcting" them removes the example
       - id: typos
         exclude: |
           (?x)^(
@@ -36,6 +38,7 @@ repos:
             |results/.*
             |.*\.json$
             |.*\.csv$
+            |patterns/medical-content-review/reviewers/claim_tags\.py$
           )$
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
@@ -102,7 +105,7 @@ repos:
     hooks:
       - id: uv-audit
         name: audit dependencies for known vulnerabilities
-        entry: uv audit --preview-features audit-command
+        entry: uv audit --preview-features audit
         language: system
         files: ^(pyproject\.toml|uv\.lock)$
         pass_filenames: false

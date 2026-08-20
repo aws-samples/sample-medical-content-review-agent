@@ -19,6 +19,9 @@ services:
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
+      # Lets the agent take the user identity from the X-Local-User-Id header: no Cognito
+      # pool signs tokens for a compose run, and the deployed Runtime never sets this
+      - ALLOW_LOCAL_USER_ID_HEADER=true
       - OTEL_TRACES_EXPORTER=none
       - OTEL_METRICS_EXPORTER=none
       - OTEL_LOGS_EXPORTER=none

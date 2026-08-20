@@ -34,7 +34,6 @@ if str(scripts_dir) not in sys.path:
     sys.path.insert(0, str(scripts_dir))
 
 from utils import (
-    create_mock_jwt,
     generate_session_id,
     get_stack_config,
     print_msg,
@@ -113,7 +112,9 @@ def run_docker_container(memory_id: str, stack_name: str, region: str) -> str | 
         if val:
             env_args.extend(["-e", f"{var}={val}"])
 
-    # Required environment variables for agent
+    # Required environment variables for agent. The last one lets the agent take the
+    # user identity from the X-Local-User-Id header, since no Cognito pool signs tokens
+    # for a container run. The deployed Runtime never sets it.
     env_args.extend(
         [
             "-e",
@@ -124,6 +125,8 @@ def run_docker_container(memory_id: str, stack_name: str, region: str) -> str | 
             f"AWS_DEFAULT_REGION={region}",
             "-e",
             f"AWS_REGION={region}",
+            "-e",
+            "ALLOW_LOCAL_USER_ID_HEADER=true",
         ]
     )
 
@@ -198,29 +201,29 @@ def invoke_agent_docker(url: str, prompt: str, session_id: str, user_id: str) ->
     """
     Invoke agent and print streaming events.
 
-    Sends a mock JWT Bearer token in the Authorization header so the agent
-    can extract the user ID from the token's 'sub' claim, matching the
-    production authentication flow.
+    A container run has no Cognito pool to sign or verify a token against, so the
+    identity travels in the X-Local-User-Id header. Deployed runs send a real
+    Cognito access token instead and the agent takes the user ID from its 'sub'.
 
     Args:
         url (str): Agent endpoint URL.
         prompt (str): User prompt.
         session_id (str): Session ID for conversation continuity.
-        user_id (str): User ID to embed in the mock JWT.
+        user_id (str): User ID to send as the local identity.
     """
     payload = {
         "prompt": prompt,
         "runtimeSessionId": session_id,
     }
 
-    mock_token = create_mock_jwt(user_id)
-
     try:
         response = requests.post(
             url,
             headers={
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {mock_token}",
+                # No Cognito pool backs a container run, so the identity is named
+                # directly instead of wrapped in a token nothing can verify
+                "X-Local-User-Id": user_id,
             },
             json=payload,
             stream=True,

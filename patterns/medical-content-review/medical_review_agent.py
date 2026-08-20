@@ -15,18 +15,22 @@ from bedrock_agentcore.memory.integrations.strands.session_manager import (
 from bedrock_agentcore.runtime import BedrockAgentCoreApp, RequestContext
 from review_upload_hook import ReviewS3UploadHook
 from reviewers import (
+    extract_claims,
+    get_claims,
     get_reviews,
+    match_claims,
     run_external_review,
     run_generic_review,
     run_internal_review,
 )
+from reviewers.claim_tags import set_claims_library_expected
 from strands import Agent
 from strands.models import BedrockModel, CacheConfig
 from strands_tools import file_read, file_write
 from utils.auth import extract_user_id_from_context
 from utils.inference import get_bedrock_config, get_inference_configs
 
-from tools import batch_content, process_pdf
+from tools import batch_content, load_claims_library, process_pdf
 
 INFERENCE_CONFIG, _ = get_inference_configs()
 BEDROCK_CONFIG = get_bedrock_config()
@@ -77,6 +81,8 @@ def build_context_block(
     reference_uris: list[str],
     reference_names: list[str],
     enabled_sources: list[str],
+    claims_uri: str | None = None,
+    claims_name: str | None = None,
 ) -> str:
     """Build the per-request input block that gets appended to the user prompt."""
     lines = [
@@ -97,6 +103,21 @@ def build_context_block(
             lines.append(f"  - s3_uri: `{uri}` — original_filename: `{name}`")
     else:
         lines.append("  - (none)")
+    lines.append("- pre_approved_claims_file:")
+    if claims_uri:
+        lines.append(f"  - s3_uri: `{claims_uri}`")
+        lines.append(f"  - original_filename: `{claims_name or '(unknown)'}`")
+        # Restated next to the file itself: the claims workflow being skipped is the one
+        # failure that leaves the whole report without claim tags
+        lines.append(
+            "  - claims workflow: MANDATORY — run steps 3 and 4 for every batch and"
+            " pass each batch's `matched_claims_s3_uri` to the reviewers in step 5"
+        )
+    else:
+        lines.append(
+            "  - (none — skip the claims workflow entirely, unless the request itself"
+            " names a claims spreadsheet)"
+        )
     lines.append(f"- enabled_sources: {enabled_sources}")
     return "\n".join(lines)
 
@@ -130,20 +151,28 @@ def create_medical_review_agent(
         region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
     )
 
-    # Only expose the external reviewer when at least one external source is
-    # enabled. Removing it from the tool list entirely means the model cannot
-    # call it even if it tries — a stricter guard than a prompt instruction.
+    # Only expose the external reviewer when at least one external source is enabled:
+    # removing a tool from the list entirely means the model cannot call it even if it
+    # tries — a stricter guard than a prompt instruction.
+    #
+    # The claims tools stay available either way. They are inert without a claims file,
+    # and a caller that does not go through the UI (a script hitting the runtime with a
+    # prompt) can name the spreadsheet in the prompt itself instead of the payload.
     tools = [
         file_read,
         file_write,
         process_pdf,
         batch_content,
+        load_claims_library,
+        extract_claims,
+        match_claims,
+        get_claims,
         run_generic_review,
         run_internal_review,
         get_reviews,
     ]
     if external_sources_enabled:
-        tools.insert(5, run_external_review)
+        tools.append(run_external_review)
 
     review_upload_hook = ReviewS3UploadHook()
 
@@ -207,6 +236,7 @@ async def agent_stream(payload, context: RequestContext):
     - enabledSources: Subset of {pubmed, openfda, clinicaltrials, nova} (optional)
     - contentPdfUri: S3 URI of the medical content PDF to review
     - referenceUris: List of S3 URIs for reference materials (optional)
+    - claimsUri: S3 URI of the pre-approved claims spreadsheet (optional)
     """
     user_query = payload.get("prompt")
     session_id = payload.get("runtimeSessionId")
@@ -216,6 +246,8 @@ async def agent_stream(payload, context: RequestContext):
     content_pdf_name = payload.get("contentPdfName") or ""
     reference_uris = payload.get("referenceUris") or []
     reference_names = payload.get("referenceNames") or []
+    claims_uri = payload.get("claimsUri") or ""
+    claims_name = payload.get("claimsName") or ""
 
     if not all([user_query, session_id]):
         yield {
@@ -223,6 +255,11 @@ async def agent_stream(payload, context: RequestContext):
             "error": "Missing required fields: prompt or runtimeSessionId",
         }
         return
+
+    # Record whether this review has a claims library before the orchestrator starts, so
+    # the reviewers can refuse to run without matched claims. Skipping extraction and
+    # matching would otherwise pass silently, as a review with no claim tags at all.
+    set_claims_library_expected(session_id, claims_uri)
 
     full_prompt = (
         user_query
@@ -234,6 +271,8 @@ async def agent_stream(payload, context: RequestContext):
             reference_uris=reference_uris,
             reference_names=reference_names,
             enabled_sources=enabled_sources,
+            claims_uri=claims_uri,
+            claims_name=claims_name,
         )
     )
 

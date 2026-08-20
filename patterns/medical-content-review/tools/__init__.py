@@ -1,6 +1,7 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
+from tools.claims_library import load_claims_library
 from tools.content_batcher import batch_content
 from tools.pdf_processor import process_pdf
 
-__all__ = ["batch_content", "process_pdf"]
+__all__ = ["batch_content", "load_claims_library", "process_pdf"]

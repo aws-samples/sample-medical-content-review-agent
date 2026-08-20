@@ -8,11 +8,15 @@ import re
 import boto3
 from strands import tool
 
-from reviewers._common import REVIEWS_PREFIX, STAGING_BUCKET
+from reviewers._common import REVIEWS_PREFIX, STAGING_BUCKET, write_local_file
+from reviewers.claim_tags import load_claim_records, tag_findings
 
 s3_client = boto3.client("s3")
 
-REVIEWER_KIND_RE = re.compile(r"/(?P<kind>generic|external|internal)_[^/]+\.json$")
+REVIEWER_KIND_RE = re.compile(
+    r"/(?P<kind>generic|external|internal|claims)_[^/]+\.json$"
+)
+REVIEWER_KINDS = ("generic", "external", "internal", "claims")
 LOCAL_AGGREGATE_PATH = "/tmp/all_findings.json"  # noqa: S108  # nosec B108
 
 
@@ -21,8 +25,8 @@ def get_reviews(session_id: str) -> str:
     """Aggregate all per-batch reviewer JSONs, save them, and return a pointer.
 
     Reads every file under `s3://{STAGING_BUCKET}/reviews/{session_id}/`, tags each
-    finding with the reviewer that produced it (`"generic" | "external" | "internal"`),
-    sorts findings by page number, then persists the result in TWO places:
+    finding with the reviewer that produced it (`"generic" | "external" | "internal"
+    | "claims"`), sorts findings by page number, then persists the result in TWO places:
 
     1. `s3://{STAGING_BUCKET}/reviews/{session_id}/all_findings.json` — the durable
        record, used for auditing the editor's dedupe decisions after the fact.
@@ -45,7 +49,7 @@ def get_reviews(session_id: str) -> str:
         A JSON pointer of shape:
         `{"local_path": "/tmp/all_findings.json",
           "aggregate_s3_uri": "s3://...",
-          "counts": {"generic": N, "external": N, "internal": N},
+          "counts": {"generic": N, "external": N, "internal": N, "claims": N},
           "total": N,
           "instruction": "Call file_read('/tmp/all_findings.json') to load every
                           finding verbatim before editing."}`
@@ -58,7 +62,7 @@ def get_reviews(session_id: str) -> str:
 
     paginator = s3_client.get_paginator("list_objects_v2")
     findings: list[dict] = []
-    counts = {"generic": 0, "external": 0, "internal": 0}
+    counts = dict.fromkeys(REVIEWER_KINDS, 0)
     for page in paginator.paginate(Bucket=STAGING_BUCKET, Prefix=prefix):
         for obj in page.get("Contents") or []:
             key = obj["Key"]
@@ -87,6 +91,10 @@ def get_reviews(session_id: str) -> str:
 
     findings.sort(key=_sort_key)
 
+    # Re-derive the claim match tag in Python: a reviewer may have left it out, and the
+    # tag has to be on every finding, not only the ones the model remembered to mark.
+    findings = tag_findings(findings, load_claim_records(session_id))
+
     aggregate_key = f"{prefix}all_findings.json"
     body = json.dumps({"findings": findings, "counts": counts}, indent=2).encode(
         "utf-8"
@@ -97,8 +105,7 @@ def get_reviews(session_id: str) -> str:
         Body=body,
         ContentType="application/json",
     )
-    with open(LOCAL_AGGREGATE_PATH, "wb") as f:
-        f.write(body)
+    write_local_file(LOCAL_AGGREGATE_PATH, body)
 
     pointer = {
         "local_path": LOCAL_AGGREGATE_PATH,

@@ -14,11 +14,22 @@ const ACCEPTED_TYPES = [
 ];
 const ACCEPTED_EXTENSIONS = ".pdf,.txt,.csv,.md,.doc,.docx";
 
+// The pre-approved claims library is a spreadsheet, not a document. Legacy .xls is
+// left out because the backend parser reads the OOXML formats and CSV only.
+const CLAIMS_EXTENSIONS = ".xlsx,.xlsm,.csv";
+
 interface FileUploadCardsProps {
   documentFile: File | null;
   onDocumentChange: (file: File | null) => void;
   referenceFiles: File[];
   onReferenceFilesChange: (files: File[]) => void;
+  claimsFile: File | null;
+  onClaimsChange: (file: File | null) => void;
+  // Result of parsing the claims spreadsheet on upload, so a header the parser could
+  // not read is visible before the review runs rather than after
+  claimsStatus?: "parsing" | "ready" | "error";
+  claimsSummary?: string;
+  claimsError?: string;
 }
 
 export function FileUploadCards({
@@ -26,15 +37,35 @@ export function FileUploadCards({
   onDocumentChange,
   referenceFiles,
   onReferenceFilesChange,
+  claimsFile,
+  onClaimsChange,
+  claimsStatus,
+  claimsSummary,
+  claimsError,
 }: FileUploadCardsProps) {
   const documentInputRef = useRef<HTMLInputElement>(null);
   const referenceInputRef = useRef<HTMLInputElement>(null);
+  const claimsInputRef = useRef<HTMLInputElement>(null);
 
   const isAccepted = (file: File) =>
     ACCEPTED_TYPES.includes(file.type) ||
     ACCEPTED_EXTENSIONS.split(",").some((ext) =>
       file.name.toLowerCase().endsWith(ext),
     );
+
+  const isClaimsAccepted = (file: File) =>
+    CLAIMS_EXTENSIONS.split(",").some((ext) =>
+      file.name.toLowerCase().endsWith(ext),
+    );
+
+  const handleClaimsDrop = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      const file = e.dataTransfer.files[0];
+      if (file && isClaimsAccepted(file)) onClaimsChange(file);
+    },
+    [onClaimsChange],
+  );
 
   const handleDocumentDrop = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
@@ -58,7 +89,7 @@ export function FileUploadCards({
     e.preventDefault();
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       {/* Document Upload */}
       <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
         <div className="bg-gradient-to-r from-indigo-50 to-blue-50 dark:from-indigo-950/40 dark:to-blue-950/40 px-6 py-4 border-b border-gray-200 dark:border-gray-700">
@@ -276,6 +307,162 @@ export function FileUploadCards({
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
               Multiple files supported
             </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Pre-approved Claims Upload */}
+      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+        <div className="bg-gradient-to-r from-amber-50 to-yellow-50 dark:from-amber-950/40 dark:to-yellow-950/40 px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+          <div className="flex justify-between items-center">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+              <svg
+                className="w-5 h-5 text-amber-600"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"
+                />
+              </svg>
+              Pre-Approved Claims
+            </h2>
+            <div className="flex items-center gap-2">
+              {/* The parser resolves headers by alias, and none of that is visible from a
+                  file dialog. Spelling it out inline made this card taller than the other
+                  two, so it hides behind a hint that stays reachable after upload too. */}
+              <div className="relative group">
+                <button
+                  type="button"
+                  aria-label="Which columns the claims file needs"
+                  className="w-5 h-5 flex items-center justify-center rounded-full border border-amber-400/70 dark:border-amber-600/70 text-[11px] font-bold leading-none text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50 transition-colors"
+                >
+                  ?
+                </button>
+                {/* w-64, not wider: the card clips overflow, and at the lg breakpoint a
+                    column is only ~310px, so a wider panel would lose its right edge */}
+                <div className="pointer-events-none absolute right-0 top-7 z-20 w-64 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl px-3 py-2 text-left text-[11px] leading-snug text-gray-600 dark:text-gray-400 opacity-0 invisible transition-opacity group-hover:opacity-100 group-hover:visible group-focus-within:opacity-100 group-focus-within:visible">
+                  <p>
+                    <span className="font-semibold text-gray-700 dark:text-gray-300">
+                      Required column:
+                    </span>{" "}
+                    the claim text — a header like Claim Text, Claim, Approved
+                    Claim, Statement or Wording.
+                  </p>
+                  <p className="mt-1">
+                    <span className="font-semibold text-gray-700 dark:text-gray-300">
+                      Optional:
+                    </span>{" "}
+                    Claim ID, Status, Type, Approved Date, Expiry Date,
+                    Reference, Source, Audience, Restrictions, MLR Job Code. Any
+                    other column is kept as an extra.
+                  </p>
+                </div>
+              </div>
+              {claimsFile && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onClaimsChange(null);
+                  }}
+                  className="text-gray-500 hover:text-red-600 transition-colors"
+                >
+                  <svg
+                    className="w-5 h-5"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+        <div
+          onDrop={handleClaimsDrop}
+          onDragOver={handleDragOver}
+          onClick={() => claimsInputRef.current?.click()}
+          className="p-8 border-4 border-dashed border-amber-200 dark:border-amber-800 m-6 rounded-xl hover:border-amber-400 hover:bg-amber-50/50 dark:hover:bg-amber-950/30 transition-all cursor-pointer h-64 flex items-center justify-center"
+        >
+          <input
+            ref={claimsInputRef}
+            type="file"
+            accept={CLAIMS_EXTENSIONS}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f && isClaimsAccepted(f)) onClaimsChange(f);
+            }}
+            className="hidden"
+          />
+          <div className="text-center">
+            <svg
+              className="mx-auto h-12 w-12 text-amber-400 mb-3"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+              />
+            </svg>
+            {claimsFile ? (
+              <div>
+                <p className="text-lg font-semibold text-amber-600 mb-2">
+                  ✓ {claimsFile.name}
+                </p>
+                {claimsStatus === "parsing" && (
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    Reading the claims library...
+                  </p>
+                )}
+                {claimsStatus === "ready" && claimsSummary && (
+                  <p className="text-xs text-green-700 dark:text-green-400">
+                    {claimsSummary}
+                  </p>
+                )}
+                {claimsStatus === "error" && (
+                  <p className="text-xs text-red-600 dark:text-red-400 whitespace-pre-line">
+                    {claimsError ||
+                      "Could not read this file — the review will try again."}
+                  </p>
+                )}
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Click to change or drop new file
+                </p>
+              </div>
+            ) : (
+              <div>
+                <p className="text-lg font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                  Optional claims library
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Human-approved claims to match the content against first
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Supported formats: XLSX, XLSM, CSV
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                  Needs a claim text column —{" "}
+                  <span className="text-amber-600 dark:text-amber-400">
+                    see ? above
+                  </span>
+                </p>
+              </div>
+            )}
           </div>
         </div>
       </div>

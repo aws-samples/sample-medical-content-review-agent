@@ -16,7 +16,13 @@ export type StreamEvent =
   | { type: "text"; content: string }
   | { type: "tool_use_start"; toolUseId: string; name: string }
   | { type: "tool_use_delta"; toolUseId: string; input: string }
-  | { type: "tool_result"; toolUseId: string; result: string }
+  | {
+      type: "tool_result";
+      toolUseId: string;
+      result: string;
+      // "error" when the tool raised — a failed step must not read as a completed one
+      status?: "success" | "error";
+    }
   | { type: "message"; role: string; content: unknown[] }
   | { type: "result"; stopReason: string }
   | { type: "lifecycle"; event: string };
