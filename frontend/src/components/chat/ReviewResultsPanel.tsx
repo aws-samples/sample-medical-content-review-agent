@@ -637,7 +637,7 @@ export function ReviewResultsPanel({
   // Without a claims library there is nothing to switch to, so the panel keeps its
   // single header. With one, the matching tab leads when the review found no issues.
   const activeResultsTab: ResultsTab = claimsReport
-    ? (resultsTab ?? (issues.length === 0 ? "claims" : "issues"))
+    ? resultsTab ?? (issues.length === 0 ? "claims" : "issues")
     : "issues";
 
   const stats = useMemo(
@@ -746,8 +746,8 @@ export function ReviewResultsPanel({
                       const cls = isActive
                         ? `${base} bg-indigo-50 border-indigo-300 shadow-sm`
                         : isDone
-                          ? `${base} bg-green-50 border-green-200`
-                          : `${base} bg-gray-50 border-gray-200 opacity-60`;
+                        ? `${base} bg-green-50 border-green-200`
+                        : `${base} bg-gray-50 border-gray-200 opacity-60`;
                       return (
                         <div key={idx} className={cls}>
                           <span className="text-xl">{step.icon}</span>
@@ -756,8 +756,8 @@ export function ReviewResultsPanel({
                               isActive
                                 ? "font-semibold text-indigo-900"
                                 : isDone
-                                  ? "text-green-800"
-                                  : "text-gray-600"
+                                ? "text-green-800"
+                                : "text-gray-600"
                             }`}
                           >
                             {step.text}
@@ -872,8 +872,8 @@ export function ReviewResultsPanel({
                           entry.status === "running"
                             ? "bg-white border-indigo-200"
                             : entry.status === "error"
-                              ? "bg-red-50 border-red-300"
-                              : "bg-white border-gray-200"
+                            ? "bg-red-50 border-red-300"
+                            : "bg-white border-gray-200"
                         }`;
                         // A failed tool call must not look like a completed one: the
                         // agent may carry on without it, and the user has to see that
@@ -923,8 +923,8 @@ export function ReviewResultsPanel({
                                   entry.status === "running"
                                     ? "text-indigo-900 font-semibold"
                                     : entry.status === "error"
-                                      ? "text-red-800 font-semibold"
-                                      : "text-gray-700"
+                                    ? "text-red-800 font-semibold"
+                                    : "text-gray-700"
                                 }`}
                               >
                                 {entry.label}
