@@ -310,7 +310,7 @@ export function ClaimsLibraryPreview({
 }) {
   if (claims.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full">
+      <div className="flex items-center justify-center h-full bg-white dark:bg-gray-800">
         <p className="text-gray-400">No approved claims parsed</p>
       </div>
     );
@@ -319,7 +319,11 @@ export function ClaimsLibraryPreview({
     ([, header]) => !!header,
   );
   return (
-    <div className="h-full overflow-auto">
+    // This table paints its own surface rather than inheriting one: the landing page
+    // hosts it on a dark-aware card while the results view hosts it on a hardcoded
+    // white one, and without a background of its own the dark text variants below
+    // would fire against white there and wash the whole table out
+    <div className="h-full overflow-auto bg-white dark:bg-gray-800">
       {mapped.length > 0 && (
         <div className="px-3 py-2 bg-indigo-50 dark:bg-indigo-950/50 border-b border-indigo-100 dark:border-indigo-900 text-[10px] text-indigo-900 dark:text-indigo-200">
           <span className="font-semibold">Columns read as: </span>
