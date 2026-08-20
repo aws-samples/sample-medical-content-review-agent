@@ -84,6 +84,7 @@ The script automatically passes these to the container:
 | `AWS_ACCESS_KEY_ID` | Local env | AWS authentication |
 | `AWS_SECRET_ACCESS_KEY` | Local env | AWS authentication |
 | `AWS_SESSION_TOKEN` | Local env | AWS authentication (if using temporary credentials) |
+| `ALLOW_LOCAL_USER_ID_HEADER` | Set to `true` by the script | Lets the agent take the user identity from `X-Local-User-Id`, since no Cognito pool signs tokens for a local container (see [Authentication](#authentication-the-local-identity-header)) |
 
 **Important: AWS credentials must be exported as environment variables.** The Docker container cannot read credentials from `~/.aws/credentials` or `~/.aws/config`. Before running, export them:
 
@@ -94,13 +95,16 @@ export AWS_SECRET_ACCESS_KEY=$(aws configure get aws_secret_access_key)
 export AWS_SESSION_TOKEN=$(aws configure get aws_session_token)  # if using temporary credentials
 ```
 
-## Authentication: Mock JWT for Local Testing
+## Authentication: The Local Identity Header
 
-In production, AgentCore Runtime validates the user's JWT token and passes it to the agent via `RequestContext`. The agent extracts the user ID from the token's `sub` claim — it never trusts a `userId` field in the request payload (to prevent impersonation via prompt injection).
+In production, the user's JWT arrives in the `Authorization` header and the agent verifies it itself against the Cognito user pool's JWKS (RS256, issuer and expiry checked, client ID matched against the pool's app clients). The user ID comes from the verified token's `sub` claim — never from a `userId` field in the request payload, which prompt injection could set.
 
-When running locally via Docker, there is no AgentCore Runtime to provide a validated JWT. The test scripts solve this by generating a **mock unsigned JWT** containing the test user ID as the `sub` claim and sending it in the `Authorization: Bearer` header. The agent's `extract_user_id_from_context()` decodes the JWT without signature verification (since Runtime handles that in production), so the mock token works identically to a real one.
+A container run has no pool that will sign a token for it, and an unsigned or self-signed token is (correctly) rejected by that verification. So the test scripts name the identity directly in an `X-Local-User-Id` header, which the agent honours **only** when `ALLOW_LOCAL_USER_ID_HEADER` is set — as `test-agent-docker.py` does. The deployed Runtime never sets that variable, and its authorizer forwards only `Authorization` anyway, so the header cannot be used to impersonate anyone in a deployed environment.
 
-This approach ensures the local testing path exercises the same authentication code path as production.
+| Environment | `ALLOW_LOCAL_USER_ID_HEADER` | Identity source |
+|-------------|------------------------------|-----------------|
+| Docker / `--local` | `true` | `X-Local-User-Id` header |
+| Deployed Runtime | unset | `sub` of the verified Cognito JWT |
 
 ## Troubleshooting
 

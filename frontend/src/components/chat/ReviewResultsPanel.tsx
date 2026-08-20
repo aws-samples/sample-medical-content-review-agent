@@ -24,6 +24,9 @@ export interface ReviewIssue {
 
 export type ClaimMatchStatus = "exact" | "partial" | "none";
 
+// The two views of a finished review: the claim-match table and the findings list
+type ResultsTab = "issues" | "claims";
+
 // An exact match is either the approved copy as written, or the same words rearranged
 export type MatchPrecision = "verbatim" | "reordered";
 
@@ -400,6 +403,112 @@ export function ClaimsLibraryPreview({
   );
 }
 
+// The claim-match results, rendered as one of the two tabs of the right-hand panel.
+// Matching and issues are read one at a time, so they share the panel instead of
+// pushing the document preview further down the page.
+function ClaimsMatchingTab({ claimsReport }: { claimsReport: ClaimsReport }) {
+  const counts: {
+    value: number;
+    label: string;
+    border: string;
+    text: string;
+  }[] = [
+    {
+      value: claimsReport.total_claims,
+      label: "Claims Extracted",
+      border: "border-gray-200",
+      text: "text-indigo-600",
+    },
+    {
+      value: claimsReport.counts.exact,
+      label: "Exact Match",
+      border: "border-green-200",
+      text: "text-green-600",
+    },
+    {
+      value: claimsReport.counts.partial,
+      label: "Partial Match",
+      border: "border-amber-200",
+      text: "text-amber-600",
+    },
+    {
+      value: claimsReport.counts.none,
+      label: "No Match",
+      border: "border-slate-200",
+      text: "text-slate-600",
+    },
+  ];
+  return (
+    <div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
+        {counts.map((count) => (
+          <div
+            key={count.label}
+            className={`rounded-xl border p-3 text-center ${count.border}`}
+          >
+            <p className={`text-2xl font-bold ${count.text}`}>{count.value}</p>
+            <p className="text-[11px] font-semibold text-gray-600 mt-0.5">
+              {count.label}
+            </p>
+          </div>
+        ))}
+      </div>
+      <ClaimMatchLegend />
+      <div className="space-y-2">
+        {claimsReport.claims.map((claim) => (
+          <div
+            key={claim.claim_ref}
+            className="border border-gray-200 rounded-lg px-3 py-2"
+          >
+            <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+              <span className="text-[10px] font-bold bg-gray-800 text-white px-2 py-0.5 rounded-full">
+                Page {claim.page}
+              </span>
+              {isClaimMatchStatus(claim.match_status) && (
+                <ClaimMatchBadge
+                  status={claim.match_status}
+                  claimId={claim.matched_claim_id}
+                  precision={claim.match_precision}
+                />
+              )}
+              {claim.claim_type && (
+                <span className="text-[10px] text-gray-500 uppercase tracking-wide">
+                  {claim.claim_type.replace(/_/g, " ")}
+                </span>
+              )}
+              {claim.library_claim_usable === false && (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-red-100 text-red-800 border-red-300">
+                  {claim.library_status || "Not usable"}
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-gray-800 italic">
+              &ldquo;{claim.text}&rdquo;
+            </p>
+            {claim.deviation && (
+              <p className="text-xs text-amber-800 mt-1">
+                <strong>Deviation:</strong> {claim.deviation}
+              </p>
+            )}
+            {claim.matched_claim_text && (
+              <p className="text-xs text-gray-500 mt-1">
+                <strong>Approved wording:</strong> &ldquo;
+                {claim.matched_claim_text}&rdquo;
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+      <p className="text-xs text-gray-500 mt-3">
+        Claims with no pre-approved match are not violations — they carry the
+        tag so you can see they were verified against the references and
+        external sources instead. The claims library itself is never modified by
+        this review.
+      </p>
+    </div>
+  );
+}
+
 function DocumentPreviewHeader({
   tabs,
   activeIdx,
@@ -492,6 +601,9 @@ export function ReviewResultsPanel({
   const [selectedIssue, setSelectedIssue] = useState<ReviewIssue | null>(null);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [activePreviewIdx, setActivePreviewIdx] = useState<number>(0);
+  // null until the user picks a tab, so the default can follow the results without
+  // overriding a choice they have already made
+  const [resultsTab, setResultsTab] = useState<ResultsTab | null>(null);
   const activityScrollRef = useRef<HTMLDivElement | null>(null);
 
   // Effective preview tab list: prefer previewDocs, fall back to legacy documentUrl
@@ -517,6 +629,12 @@ export function ReviewResultsPanel({
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     if (nearBottom) el.scrollTop = el.scrollHeight;
   }, [activityLog]);
+
+  // Without a claims library there is nothing to switch to, so the panel keeps its
+  // single header. With one, the matching tab leads when the review found no issues.
+  const activeResultsTab: ResultsTab = claimsReport
+    ? resultsTab ?? (issues.length === 0 ? "claims" : "issues")
+    : "issues";
 
   const stats = useMemo(
     () => ({
@@ -624,8 +742,8 @@ export function ReviewResultsPanel({
                       const cls = isActive
                         ? `${base} bg-indigo-50 border-indigo-300 shadow-sm`
                         : isDone
-                          ? `${base} bg-green-50 border-green-200`
-                          : `${base} bg-gray-50 border-gray-200 opacity-60`;
+                        ? `${base} bg-green-50 border-green-200`
+                        : `${base} bg-gray-50 border-gray-200 opacity-60`;
                       return (
                         <div key={idx} className={cls}>
                           <span className="text-xl">{step.icon}</span>
@@ -634,8 +752,8 @@ export function ReviewResultsPanel({
                               isActive
                                 ? "font-semibold text-indigo-900"
                                 : isDone
-                                  ? "text-green-800"
-                                  : "text-gray-600"
+                                ? "text-green-800"
+                                : "text-gray-600"
                             }`}
                           >
                             {step.text}
@@ -750,8 +868,8 @@ export function ReviewResultsPanel({
                           entry.status === "running"
                             ? "bg-white border-indigo-200"
                             : entry.status === "error"
-                              ? "bg-red-50 border-red-300"
-                              : "bg-white border-gray-200"
+                            ? "bg-red-50 border-red-300"
+                            : "bg-white border-gray-200"
                         }`;
                         // A failed tool call must not look like a completed one: the
                         // agent may carry on without it, and the user has to see that
@@ -801,8 +919,8 @@ export function ReviewResultsPanel({
                                   entry.status === "running"
                                     ? "text-indigo-900 font-semibold"
                                     : entry.status === "error"
-                                      ? "text-red-800 font-semibold"
-                                      : "text-gray-700"
+                                    ? "text-red-800 font-semibold"
+                                    : "text-gray-700"
                                 }`}
                               >
                                 {entry.label}
@@ -858,8 +976,9 @@ export function ReviewResultsPanel({
     );
   }
 
-  // No issues found after review completed
-  if (issues.length === 0) {
+  // No issues found after review completed. A run with a claims library goes to the
+  // panel below instead, so its match results stay reachable on the Matched Claims tab.
+  if (issues.length === 0 && !claimsReport) {
     return (
       <div className="flex items-center justify-center h-full bg-gradient-to-br from-slate-800 via-slate-700 to-slate-900">
         <div className="bg-white rounded-2xl shadow-2xl border border-gray-200 p-12 max-w-lg w-full mx-6 text-center">
@@ -882,13 +1001,8 @@ export function ReviewResultsPanel({
           <p className="text-gray-600 mb-6">
             No issues were detected in your document.
           </p>
-          {claimsReport && (
-            <p className="text-sm text-gray-500 mb-6">
-              {claimsReport.total_claims} claims extracted —{" "}
-              {claimsReport.counts.exact} exact, {claimsReport.counts.partial}{" "}
-              partial, {claimsReport.counts.none} with no pre-approved match.
-            </p>
-          )}
+          {/* A run with a claims library never lands here, so there are no match
+              counts to summarise: it goes to the two-panel view instead */}
           <button
             onClick={onNewReview}
             className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-lg transition-colors"
@@ -925,7 +1039,12 @@ export function ReviewResultsPanel({
                 Review Complete
               </h2>
               <p className="text-gray-600 mt-1">
-                {stats.total} issues detected in your document
+                {stats.total === 0
+                  ? "No issues detected in your document"
+                  : `${stats.total} issues detected in your document`}
+                {claimsReport
+                  ? ` · ${claimsReport.total_claims} claims matched against the library`
+                  : ""}
               </p>
             </div>
             <div className="flex gap-3">
@@ -999,129 +1118,6 @@ export function ReviewResultsPanel({
           </div>
         </div>
 
-        {/* Pre-approved claims matching */}
-        {claimsReport && (
-          <details
-            open
-            className="bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden mb-6 group"
-          >
-            <summary className="bg-gradient-to-r from-amber-50 to-yellow-50 px-6 py-4 border-b border-gray-200 cursor-pointer select-none list-none flex items-center justify-between">
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900">
-                  Pre-Approved Claims Matching
-                </h3>
-                <p className="text-xs text-gray-500 mt-0.5">
-                  {claimsReport.total_claims} claims extracted ·{" "}
-                  {claimsReport.counts.exact} exact ·{" "}
-                  {claimsReport.counts.partial} partial ·{" "}
-                  {claimsReport.counts.none} no match
-                </p>
-              </div>
-              <svg
-                className="w-5 h-5 text-gray-500 transition-transform group-open:rotate-90"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2.5}
-                  d="M9 5l7 7-7 7"
-                />
-              </svg>
-            </summary>
-            <div className="p-4">
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-                <div className="rounded-xl border border-gray-200 p-4 text-center">
-                  <p className="text-3xl font-bold text-indigo-600">
-                    {claimsReport.total_claims}
-                  </p>
-                  <p className="text-xs font-semibold text-gray-600 mt-1">
-                    Claims Extracted
-                  </p>
-                </div>
-                <div className="rounded-xl border border-green-200 p-4 text-center">
-                  <p className="text-3xl font-bold text-green-600">
-                    {claimsReport.counts.exact}
-                  </p>
-                  <p className="text-xs font-semibold text-gray-600 mt-1">
-                    Exact Match
-                  </p>
-                </div>
-                <div className="rounded-xl border border-amber-200 p-4 text-center">
-                  <p className="text-3xl font-bold text-amber-600">
-                    {claimsReport.counts.partial}
-                  </p>
-                  <p className="text-xs font-semibold text-gray-600 mt-1">
-                    Partial Match
-                  </p>
-                </div>
-                <div className="rounded-xl border border-slate-200 p-4 text-center">
-                  <p className="text-3xl font-bold text-slate-600">
-                    {claimsReport.counts.none}
-                  </p>
-                  <p className="text-xs font-semibold text-gray-600 mt-1">
-                    No Match — Verified Elsewhere
-                  </p>
-                </div>
-              </div>
-              <ClaimMatchLegend />
-              <div className="max-h-80 overflow-y-auto space-y-2">
-                {claimsReport.claims.map((claim) => (
-                  <div
-                    key={claim.claim_ref}
-                    className="border border-gray-200 rounded-lg px-3 py-2"
-                  >
-                    <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                      <span className="text-[10px] font-bold bg-gray-800 text-white px-2 py-0.5 rounded-full">
-                        Page {claim.page}
-                      </span>
-                      {isClaimMatchStatus(claim.match_status) && (
-                        <ClaimMatchBadge
-                          status={claim.match_status}
-                          claimId={claim.matched_claim_id}
-                          precision={claim.match_precision}
-                        />
-                      )}
-                      {claim.claim_type && (
-                        <span className="text-[10px] text-gray-500 uppercase tracking-wide">
-                          {claim.claim_type.replace(/_/g, " ")}
-                        </span>
-                      )}
-                      {claim.library_claim_usable === false && (
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-red-100 text-red-800 border-red-300">
-                          {claim.library_status || "Not usable"}
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs text-gray-800 italic">
-                      &ldquo;{claim.text}&rdquo;
-                    </p>
-                    {claim.deviation && (
-                      <p className="text-xs text-amber-800 mt-1">
-                        <strong>Deviation:</strong> {claim.deviation}
-                      </p>
-                    )}
-                    {claim.matched_claim_text && (
-                      <p className="text-xs text-gray-500 mt-1">
-                        <strong>Approved wording:</strong> &ldquo;
-                        {claim.matched_claim_text}&rdquo;
-                      </p>
-                    )}
-                  </div>
-                ))}
-              </div>
-              <p className="text-xs text-gray-500 mt-3">
-                Claims with no pre-approved match are not violations — they
-                carry the tag so you can see they were verified against the
-                references and external sources instead. The claims library
-                itself is never modified by this review.
-              </p>
-            </div>
-          </details>
-        )}
-
         {/* Split-Pane: PDF left, Issues right */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Left: Document Preview (with tabs for content + references) */}
@@ -1156,79 +1152,136 @@ export function ReviewResultsPanel({
             </div>
           </div>
 
-          {/* Right: Detected Issues */}
+          {/* Right: Detected Issues, with a Matched Claims tab beside it */}
           <div className="bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden">
-            <div className="bg-gradient-to-r from-red-50 to-orange-50 px-6 py-4 border-b border-gray-200">
-              <h3 className="text-lg font-semibold text-gray-900">
-                Detected Issues
-              </h3>
-            </div>
-            <div className="h-[800px] overflow-y-auto p-4">
-              <div className="space-y-4">
-                {issues.map((issue, idx) => (
-                  <div
-                    key={idx}
-                    className={`border-l-4 p-3 rounded-lg ${getSeverityColor(
-                      issue.score,
-                    )} cursor-pointer hover:shadow-lg transition-all`}
-                    onClick={() => {
-                      setCurrentPage(issue.page);
-                      const contentIdx = previewTabs.findIndex(
-                        (t) => t.kind === "content",
-                      );
-                      if (contentIdx >= 0) setActivePreviewIdx(contentIdx);
-                      setSelectedIssue(issue);
-                    }}
-                  >
-                    <div className="flex justify-between items-start mb-2">
-                      <span className="text-xs font-bold bg-gray-800 text-white px-2 py-0.5 rounded-full">
-                        Page {issue.page}
-                      </span>
-                      <span
-                        className={`text-xs font-bold ${getSeverityBadge(
-                          issue.score,
-                        )} text-white px-2 py-0.5 rounded-full`}
+            {claimsReport ? (
+              <div className="bg-gradient-to-r from-red-50 to-orange-50 border-b border-gray-200">
+                <div className="flex items-end gap-1 px-3 pt-3">
+                  {(
+                    [
+                      {
+                        id: "claims",
+                        icon: "📗",
+                        label: "Matched Claims",
+                        count: claimsReport.total_claims,
+                      },
+                      {
+                        id: "issues",
+                        icon: "⚠️",
+                        label: "Detected Issues",
+                        count: stats.total,
+                      },
+                    ] as const
+                  ).map((tab) => {
+                    const isActive = activeResultsTab === tab.id;
+                    return (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setResultsTab(tab.id)}
+                        className={`shrink-0 px-3 py-2 rounded-t-lg text-xs font-semibold flex items-center gap-1.5 border-t border-x transition-colors ${
+                          isActive
+                            ? "bg-white text-gray-900 border-gray-200 shadow-sm"
+                            : "bg-transparent text-gray-600 hover:text-gray-900 hover:bg-white/60 border-transparent"
+                        }`}
                       >
-                        {issue.score}/100
-                      </span>
-                    </div>
-                    <h4 className="font-bold text-gray-900 text-xs mb-2 flex items-center gap-1.5 flex-wrap">
-                      <span className="text-base">⚠️</span>
-                      {issue.type}
-                      {isClaimMatchStatus(issue.claim_match) && (
-                        <ClaimMatchBadge
-                          status={issue.claim_match}
-                          claimId={issue.claim_id}
-                          precision={issue.claim_precision}
-                        />
-                      )}
-                    </h4>
-                    <div className="bg-white bg-opacity-60 rounded p-2 mb-2">
-                      <p className="text-xs text-gray-800 italic">
-                        &ldquo;{issue.quote}&rdquo;
-                      </p>
-                    </div>
-                    <div className="space-y-1.5 text-xs">
-                      <div>
-                        <strong className="text-gray-900">Issue:</strong>
-                        <p className="text-gray-700 mt-0.5">{issue.issue}</p>
-                      </div>
-                      <div>
-                        <strong className="text-green-700">Fix:</strong>
-                        <p className="text-gray-700 mt-0.5">{issue.fix}</p>
-                      </div>
-                      <div className="pt-1.5 border-t border-gray-200">
-                        <p className="text-xs text-gray-600">
-                          <strong>Reference:</strong> {issue.reference}
-                        </p>
-                        <p className="text-xs text-gray-500 mt-0.5">
-                          <strong>Source:</strong> {issue.source}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                        <span className="text-sm leading-none">{tab.icon}</span>
+                        <span>{tab.label}</span>
+                        <span
+                          className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                            isActive
+                              ? "bg-gray-800 text-white"
+                              : "bg-white/70 text-gray-600"
+                          }`}
+                        >
+                          {tab.count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
+            ) : (
+              <div className="bg-gradient-to-r from-red-50 to-orange-50 px-6 py-4 border-b border-gray-200">
+                <h3 className="text-lg font-semibold text-gray-900">
+                  Detected Issues
+                </h3>
+              </div>
+            )}
+            <div className="h-[800px] overflow-y-auto p-4">
+              {activeResultsTab === "claims" && claimsReport ? (
+                <ClaimsMatchingTab claimsReport={claimsReport} />
+              ) : issues.length === 0 ? (
+                <p className="text-sm text-gray-400 italic text-center py-10">
+                  No issues were detected in this document.
+                </p>
+              ) : (
+                <div className="space-y-4">
+                  {issues.map((issue, idx) => (
+                    <div
+                      key={idx}
+                      className={`border-l-4 p-3 rounded-lg ${getSeverityColor(
+                        issue.score,
+                      )} cursor-pointer hover:shadow-lg transition-all`}
+                      onClick={() => {
+                        setCurrentPage(issue.page);
+                        const contentIdx = previewTabs.findIndex(
+                          (t) => t.kind === "content",
+                        );
+                        if (contentIdx >= 0) setActivePreviewIdx(contentIdx);
+                        setSelectedIssue(issue);
+                      }}
+                    >
+                      <div className="flex justify-between items-start mb-2">
+                        <span className="text-xs font-bold bg-gray-800 text-white px-2 py-0.5 rounded-full">
+                          Page {issue.page}
+                        </span>
+                        <span
+                          className={`text-xs font-bold ${getSeverityBadge(
+                            issue.score,
+                          )} text-white px-2 py-0.5 rounded-full`}
+                        >
+                          {issue.score}/100
+                        </span>
+                      </div>
+                      <h4 className="font-bold text-gray-900 text-xs mb-2 flex items-center gap-1.5 flex-wrap">
+                        <span className="text-base">⚠️</span>
+                        {issue.type}
+                        {isClaimMatchStatus(issue.claim_match) && (
+                          <ClaimMatchBadge
+                            status={issue.claim_match}
+                            claimId={issue.claim_id}
+                            precision={issue.claim_precision}
+                          />
+                        )}
+                      </h4>
+                      <div className="bg-white bg-opacity-60 rounded p-2 mb-2">
+                        <p className="text-xs text-gray-800 italic">
+                          &ldquo;{issue.quote}&rdquo;
+                        </p>
+                      </div>
+                      <div className="space-y-1.5 text-xs">
+                        <div>
+                          <strong className="text-gray-900">Issue:</strong>
+                          <p className="text-gray-700 mt-0.5">{issue.issue}</p>
+                        </div>
+                        <div>
+                          <strong className="text-green-700">Fix:</strong>
+                          <p className="text-gray-700 mt-0.5">{issue.fix}</p>
+                        </div>
+                        <div className="pt-1.5 border-t border-gray-200">
+                          <p className="text-xs text-gray-600">
+                            <strong>Reference:</strong> {issue.reference}
+                          </p>
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            <strong>Source:</strong> {issue.source}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>

@@ -331,29 +331,62 @@ export function FileUploadCards({
               </svg>
               Pre-Approved Claims
             </h2>
-            {claimsFile && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onClaimsChange(null);
-                }}
-                className="text-gray-500 hover:text-red-600 transition-colors"
-              >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
+            <div className="flex items-center gap-2">
+              {/* The parser resolves headers by alias, and none of that is visible from a
+                  file dialog. Spelling it out inline made this card taller than the other
+                  two, so it hides behind a hint that stays reachable after upload too. */}
+              <div className="relative group">
+                <button
+                  type="button"
+                  aria-label="Which columns the claims file needs"
+                  className="w-5 h-5 flex items-center justify-center rounded-full border border-amber-400/70 dark:border-amber-600/70 text-[11px] font-bold leading-none text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50 transition-colors"
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
-            )}
+                  ?
+                </button>
+                {/* w-64, not wider: the card clips overflow, and at the lg breakpoint a
+                    column is only ~310px, so a wider panel would lose its right edge */}
+                <div className="pointer-events-none absolute right-0 top-7 z-20 w-64 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl px-3 py-2 text-left text-[11px] leading-snug text-gray-600 dark:text-gray-400 opacity-0 invisible transition-opacity group-hover:opacity-100 group-hover:visible group-focus-within:opacity-100 group-focus-within:visible">
+                  <p>
+                    <span className="font-semibold text-gray-700 dark:text-gray-300">
+                      Required column:
+                    </span>{" "}
+                    the claim text — a header like Claim Text, Claim, Approved
+                    Claim, Statement or Wording.
+                  </p>
+                  <p className="mt-1">
+                    <span className="font-semibold text-gray-700 dark:text-gray-300">
+                      Optional:
+                    </span>{" "}
+                    Claim ID, Status, Type, Approved Date, Expiry Date,
+                    Reference, Source, Audience, Restrictions, MLR Job Code. Any
+                    other column is kept as an extra.
+                  </p>
+                </div>
+              </div>
+              {claimsFile && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onClaimsChange(null);
+                  }}
+                  className="text-gray-500 hover:text-red-600 transition-colors"
+                >
+                  <svg
+                    className="w-5 h-5"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
+              )}
+            </div>
           </div>
         </div>
         <div
@@ -421,6 +454,12 @@ export function FileUploadCards({
                 </p>
                 <p className="text-xs text-gray-500 dark:text-gray-400">
                   Supported formats: XLSX, XLSM, CSV
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                  Needs a claim text column —{" "}
+                  <span className="text-amber-600 dark:text-amber-400">
+                    see ? above
+                  </span>
                 </p>
               </div>
             )}

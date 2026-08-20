@@ -70,9 +70,9 @@ aws cloudformation describe-stacks --stack-name your-stack-name --query 'Stacks[
 
 ## Authentication in Local Mode
 
-In production, AgentCore Runtime validates the user's JWT and passes it to the agent. The agent extracts the user ID from the JWT's `sub` claim rather than trusting the request payload (preventing impersonation via prompt injection).
+In production, the JWT arrives in the `Authorization` header and the agent verifies it against the Cognito user pool's JWKS before taking the user ID from the token's `sub` claim, rather than trusting the request payload (preventing impersonation via prompt injection).
 
-When running locally via Docker Compose, there is no AgentCore Runtime. The test scripts generate a mock unsigned JWT with a test user ID as the `sub` claim and send it in the `Authorization: Bearer` header. This exercises the same code path as production without requiring a real Cognito token.
+Running locally via Docker Compose there is no pool that will sign a token for you, so the identity is named directly in an `X-Local-User-Id` header. The agent honours that header only when `ALLOW_LOCAL_USER_ID_HEADER` is set, which `docker-compose.yml` does and the deployed Runtime never does. See [Local Docker Testing](LOCAL_DOCKER_TESTING.md#authentication-the-local-identity-header) for details.
 
 ## Environment Configuration
 
