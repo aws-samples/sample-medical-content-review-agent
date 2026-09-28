@@ -20,14 +20,18 @@ Usage:
 import argparse
 import atexit
 import os
+import shutil
 import signal
-import subprocess
+import subprocess  # nosec B404 - drives the local docker CLI with fixed argument lists
 import sys
 import time
 from pathlib import Path
 
 import requests
 from colorama import Fore, Style
+
+# resolved once so every call runs docker by absolute path rather than via PATH lookup
+DOCKER = shutil.which("docker") or "docker"
 
 scripts_dir = Path(__file__).parent.parent / "scripts"
 if str(scripts_dir) not in sys.path:
@@ -68,7 +72,7 @@ def build_docker_image(pattern: str) -> bool:
     print(f"Context: {REPO_ROOT}\n")
 
     cmd = [
-        "docker",
+        DOCKER,
         "build",
         "-f",
         dockerfile,
@@ -79,7 +83,7 @@ def build_docker_image(pattern: str) -> bool:
         ".",
     ]
 
-    result = subprocess.run(cmd, cwd=REPO_ROOT)
+    result = subprocess.run(cmd, cwd=REPO_ROOT)  # nosec B603 - fixed argv, no shell
 
     if result.returncode != 0:
         print_msg("Docker build failed", "error")
@@ -131,7 +135,7 @@ def run_docker_container(memory_id: str, stack_name: str, region: str) -> str | 
     )
 
     cmd = [
-        "docker",
+        DOCKER,
         "run",
         "--rm",
         "-d",
@@ -147,7 +151,9 @@ def run_docker_container(memory_id: str, stack_name: str, region: str) -> str | 
     print(f"Stack Name: {stack_name}")
     print(f"Region: {region}\n")
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(  # nosec B603 - fixed argv, no shell
+        cmd, capture_output=True, text=True
+    )
 
     if result.returncode != 0:
         print_msg(f"Failed to start container: {result.stderr}", "error")
@@ -160,25 +166,24 @@ def run_docker_container(memory_id: str, stack_name: str, region: str) -> str | 
     print("Waiting for agent to start...")
     for _ in range(30):
         try:
-            import requests
-
             resp = requests.get("http://localhost:8080/ping", timeout=2)
             if resp.status_code == 200:
                 print_msg("Agent is ready", "success")
                 return _container_id
-        except Exception:
+        except requests.RequestException:
+            # not listening yet; keep polling until the retry budget runs out
             pass
         time.sleep(1)
 
     # Check if container is still running
-    check = subprocess.run(
-        ["docker", "ps", "-q", "-f", f"id={_container_id}"],
+    check = subprocess.run(  # nosec B603 - fixed argv, no shell
+        [DOCKER, "ps", "-q", "-f", f"id={_container_id}"],
         capture_output=True,
         text=True,
     )
     if not check.stdout.strip():
         print_msg("Container exited unexpectedly. Checking logs...", "error")
-        subprocess.run(["docker", "logs", _container_id])
+        subprocess.run([DOCKER, "logs", _container_id])  # nosec B603 - fixed argv
         _container_id = None
         return None
 
@@ -192,7 +197,9 @@ def stop_container() -> None:
     global _container_id
     if _container_id:
         print("\nStopping container...")
-        subprocess.run(["docker", "stop", _container_id], capture_output=True)
+        subprocess.run(  # nosec B603 - fixed argv, no shell
+            [DOCKER, "stop", _container_id], capture_output=True
+        )
         print_msg("Container stopped", "success")
         _container_id = None
 
