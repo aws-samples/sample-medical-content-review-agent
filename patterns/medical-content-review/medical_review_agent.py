@@ -28,7 +28,11 @@ from strands import Agent
 from strands.models import BedrockModel, CacheConfig
 from strands_tools import file_read, file_write
 from utils.auth import extract_user_id_from_context
-from utils.inference import get_bedrock_config, get_inference_configs
+from utils.inference import (
+    get_bedrock_config,
+    get_inference_configs,
+    sampling_params,
+)
 
 from tools import batch_content, load_claims_library, process_pdf
 
@@ -132,7 +136,7 @@ def create_medical_review_agent(
     model_id = os.environ.get("MODEL_ID", "global.anthropic.claude-sonnet-5")
     bedrock_model = BedrockModel(
         model_id=model_id,
-        temperature=INFERENCE_CONFIG["temperature"],
+        **sampling_params(model_id, INFERENCE_CONFIG["temperature"]),
         max_tokens=INFERENCE_CONFIG["maxTokens"],
         streaming=True,
         boto_client_config=BEDROCK_CONFIG,
