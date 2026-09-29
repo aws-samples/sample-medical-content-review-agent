@@ -19,7 +19,11 @@ from pathlib import Path, PurePosixPath
 import boto3
 from strands import Agent
 from strands.models import BedrockModel, CacheConfig
-from utils.inference import get_bedrock_config, get_inference_configs
+from utils.inference import (
+    get_bedrock_config,
+    get_inference_configs,
+    sampling_params,
+)
 
 from reviewers.claim_tags import claims_library_expected
 
@@ -137,7 +141,7 @@ def write_claims_json(
 def build_reviewer_model() -> BedrockModel:
     return BedrockModel(
         model_id=MODEL_ID,
-        temperature=INFERENCE_CONFIG["temperature"],
+        **sampling_params(MODEL_ID, INFERENCE_CONFIG["temperature"]),
         max_tokens=INFERENCE_CONFIG["maxTokens"],
         streaming=False,
         boto_client_config=BEDROCK_CONFIG,

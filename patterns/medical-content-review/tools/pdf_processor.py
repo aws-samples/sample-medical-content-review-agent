@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 import boto3
 from pdf2image import convert_from_path, pdfinfo_from_path
 from strands import tool
+from utils.inference import sampling_params
 
 s3_client = boto3.client("s3")
 bedrock_client = boto3.client("bedrock-runtime")
@@ -75,7 +76,7 @@ def _ocr_single_page(pdf_path: str, page_idx: int, dpi: int) -> tuple[int, str]:
             }
         ],
         system=[{"text": OCR_SYSTEM}],
-        inferenceConfig={"maxTokens": 8192, "temperature": 0},
+        inferenceConfig={"maxTokens": 8192, **sampling_params(OCR_MODEL_ID, 0.0)},
     )
     page_text = response["output"]["message"]["content"][0]["text"].strip()
     return page_idx, page_text

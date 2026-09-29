@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 
 import boto3
 from strands import tool
+from utils.inference import sampling_params
 
 s3_client = boto3.client("s3")
 bedrock_client = boto3.client("bedrock-runtime")
@@ -91,7 +92,7 @@ def batch_content(markdown_s3_uri: str) -> str:
             }
         ],
         system=[{"text": SYSTEM}],
-        inferenceConfig={"maxTokens": 2048, "temperature": 0},
+        inferenceConfig={"maxTokens": 2048, **sampling_params(MODEL_ID, 0.0)},
     )
     raw = response["output"]["message"]["content"][0]["text"]
     batch_page_lists: list[list[int]] = ast.literal_eval(_parse_tagged(raw, "chunks"))

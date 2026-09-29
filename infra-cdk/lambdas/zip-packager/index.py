@@ -12,7 +12,7 @@ and uploads to S3. Triggered as a CloudFormation Custom Resource.
 import json
 import logging
 import os
-import subprocess
+import subprocess  # nosec B404 - runs pip with a fixed argument list, no shell
 import sys
 import tempfile
 import urllib.request
@@ -78,7 +78,7 @@ def download_wheels(requirements: list[str], download_dir: Path) -> None:
     req_file = download_dir / "requirements.txt"
     req_file.write_text("\n".join(requirements))
 
-    subprocess.run(
+    subprocess.run(  # nosec B603 - fixed argv, requirements come from the stack's own asset
         [
             sys.executable,
             "-m",
@@ -99,7 +99,7 @@ def download_wheels(requirements: list[str], download_dir: Path) -> None:
     )
 
     # Also download OpenTelemetry
-    subprocess.run(
+    subprocess.run(  # nosec B603 - fixed argv, requirements come from the stack's own asset
         [
             sys.executable,
             "-m",
