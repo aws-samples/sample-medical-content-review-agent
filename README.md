@@ -59,6 +59,7 @@ See the [deployment guide](docs/DEPLOYMENT.md) for detailed instructions.
    - Findings on the same quote share one card, sorted by severity or by page. Each finding leads with a short headline and the kind of check that raised it, with the full issue, reference and source a click away; the words at issue are marked in the quote and highlighted more strongly in the PDF
    - Mandatory findings are shown by default. Faceted filters (type, severity, check, claim match, page) and a free-text search narrow both the findings and the claims; chips in one facet combine with OR and facets with AND, and each chip shows how many items it would keep. The severity tiles and claim-match counts are shortcuts to those filters
    - Mark a card as addressed to move it out of the open list while you work through the review (kept for the current review only)
+   - **Download Excel** fetches the readiness report, named after the reviewed document: a summary sheet (asset audience, match counts, claims per outcome, findings per check), a claims sheet with one row per claim — its outcome (approved wording, use approved wording, library claim not usable, approved for another audience, new claim), a recommendation, the matched library claim, the changed numbers, and the findings about it — and a findings sheet. It is written in code next to `review_results.json` as `reviews/{session_id}/readiness_report.xlsx`
 
 ### Pre-approved claims
 

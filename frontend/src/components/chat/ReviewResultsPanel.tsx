@@ -160,6 +160,10 @@ export interface PreviewDoc {
 interface ReviewResultsPanelProps {
   issues: ReviewIssue[];
   claimsReport?: ClaimsReport | null;
+  // Pre-signed URL of the readiness report workbook, once the review is published
+  reportXlsxUrl?: string | null;
+  // The reviewed document's filename, to name the downloads after it
+  documentName?: string;
   isLoading: boolean;
   activityLog?: ActivityEntry[];
   phases?: Phase[];
@@ -1042,6 +1046,8 @@ function getSeverityBadge(score: number) {
 export function ReviewResultsPanel({
   issues,
   claimsReport = null,
+  reportXlsxUrl = null,
+  documentName,
   isLoading,
   activityLog = [],
   phases = DEFAULT_PHASES,
@@ -1184,18 +1190,43 @@ export function ReviewResultsPanel({
     if (contentIdx >= 0) setActivePreviewIdx(contentIdx);
   };
 
-  const handleDownload = () => {
-    const blob = new Blob([JSON.stringify(issues, null, 2)], {
-      type: "application/json",
-    });
+  const downloadStem = documentName
+    ? documentName.replace(/\.pdf$/i, "") + "_"
+    : "";
+
+  const saveBlob = (blob: Blob, name: string) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "review_results.json";
+    a.download = name;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  };
+
+  const handleDownload = () =>
+    saveBlob(
+      new Blob([JSON.stringify(issues, null, 2)], {
+        type: "application/json",
+      }),
+      `${downloadStem}review_results.json`,
+    );
+
+  const [xlsxError, setXlsxError] = useState<string | null>(null);
+  // Fetched rather than linked, so the file can be named after the reviewed document
+  const handleXlsxDownload = async () => {
+    if (!reportXlsxUrl) return;
+    setXlsxError(null);
+    try {
+      const response = await fetch(reportXlsxUrl);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      saveBlob(await response.blob(), `${downloadStem}readiness_report.xlsx`);
+    } catch (e) {
+      setXlsxError(
+        `Could not download the Excel report (${e instanceof Error ? e.message : String(e)}). The link is valid for an hour after the review.`,
+      );
+    }
   };
 
   // Loading state — show document preview alongside activity log
@@ -1585,6 +1616,28 @@ export function ReviewResultsPanel({
               </p>
             </div>
             <div className="flex gap-3">
+              {reportXlsxUrl && (
+                <button
+                  onClick={handleXlsxDownload}
+                  title="One row per claim with its outcome and recommendation, plus every finding"
+                  className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3 px-6 rounded-lg transition-colors"
+                >
+                  <svg
+                    className="w-5 h-5"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                    />
+                  </svg>
+                  Download Excel
+                </button>
+              )}
               <button
                 onClick={handleDownload}
                 className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-lg transition-colors"
@@ -1625,6 +1678,11 @@ export function ReviewResultsPanel({
               </button>
             </div>
           </div>
+          {xlsxError && (
+            <p role="alert" className="mt-3 text-sm text-red-700">
+              {xlsxError}
+            </p>
+          )}
         </div>
 
         {/* Stats Bar: each count is a shortcut to that severity */}

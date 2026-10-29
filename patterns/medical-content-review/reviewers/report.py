@@ -10,20 +10,25 @@ the published fields are the ones the reviewers produced.
 import json
 
 from strands import tool
+from tools.run_record import note_issue
 from utils.s3 import (
     STAGING_BUCKET,
     presign,
+    put_bytes,
     put_json,
     read_json,
     require_bucket,
     safe_session_id,
 )
 
-from reviewers._common import REVIEWS_PREFIX
+from reviewers._common import REVIEWS_PREFIX, claims_report_key
 from reviewers.claim_tags import normalise
+from reviewers.readiness_report import build_workbook
 
 REPORT_NAME = "review_results.json"
 AGGREGATE_NAME = "all_findings.json"
+WORKBOOK_NAME = "readiness_report.xlsx"
+XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 MANDATORY_SCORE = 70
 # A finding raised by two reviewers is mandatory from this score
 CORROBORATED_SCORE = 40
@@ -216,6 +221,19 @@ def quote_groups(findings: list[dict]) -> list[str]:
     return groups
 
 
+def _publish_workbook(session_id: str, prefix: str, report: list[dict]) -> str:
+    """Write the readiness report XLSX next to the review report; return its URL tag"""
+    claims_report = read_json(claims_report_key(session_id))
+    key = prefix + WORKBOOK_NAME
+    put_bytes(key, build_workbook(claims_report, report, session_id), XLSX_TYPE)
+    url = presign(
+        STAGING_BUCKET,
+        key,
+        ResponseContentDisposition=f'attachment; filename="{WORKBOOK_NAME}"',
+    )
+    return f"\n\n[REPORT_XLSX_URL:{url}]"
+
+
 @tool
 def publish_review(
     session_id: str,
@@ -245,7 +263,8 @@ def publish_review(
     -------
     str
         A JSON summary (findings published, dropped, merged, and ignored decisions),
-        followed by a `[REVIEW_URL:...]` tag holding a pre-signed URL of the report.
+        followed by a `[REVIEW_URL:...]` tag holding a pre-signed URL of the report and
+        a `[REPORT_XLSX_URL:...]` tag for the readiness workbook.
     """
     require_bucket()
     prefix = f"{REVIEWS_PREFIX}/{safe_session_id(session_id)}/"
@@ -276,4 +295,9 @@ def publish_review(
         result += f"\n\n[REVIEW_URL:{presign(STAGING_BUCKET, report_key)}]"
     except Exception as e:  # noqa: BLE001 - the report itself is already persisted
         print(f"[REPORT] Failed to pre-sign the review report URL: {e}")
+
+    try:
+        result += _publish_workbook(session_id, prefix, report)
+    except Exception as e:  # noqa: BLE001 - the JSON report is already persisted
+        note_issue(session_id, "report", f"the readiness report XLSX failed: {e}")
     return result
