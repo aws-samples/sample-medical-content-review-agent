@@ -8,6 +8,7 @@ import { Message, MessageSegment, ToolCall } from "./types";
 import {
   ReviewResultsPanel,
   ClaimsLibraryPreview,
+  PdfPane,
   ReviewIssue,
   ActivityEntry,
   ClaimsLibraryEntry,
@@ -1000,13 +1001,7 @@ export default function ChatInterface() {
                         />
                       );
                     }
-                    return (
-                      <iframe
-                        src={active?.url}
-                        className="w-full h-full"
-                        title="PDF Document"
-                      />
-                    );
+                    return active?.url ? <PdfPane url={active.url} /> : null;
                   })()}
                 </div>
               </details>

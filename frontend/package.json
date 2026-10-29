@@ -29,6 +29,7 @@
     "react-dropzone": "^14.3.8",
     "react-markdown": "^10.1.0",
     "react-oidc-context": "^3.3.0",
+    "react-pdf": "^10.5.0",
     "react-router-dom": "^7.18.2",
     "react-spinners": "^0.17.0",
     "react-syntax-highlighter": "^16.1.0",
