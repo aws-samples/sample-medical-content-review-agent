@@ -102,7 +102,13 @@ def build_reviewer_model() -> BedrockModel:
 FINDINGS_SCHEMA_HINT = """Each finding object must have these fields:
 - `page`: int, page number the issue was found on
 - `quote`: str, exact quote from the document
-- `issue`: str, description of the problem
+- `headline`: str, the problem in at most 10 words, for a reviewer scanning a list
+  ("Superlative: 'the only'", "'reduced' became 'reduces'", "Misspelt 'psoratic'")
+- `issue_spans`: list of str, the words of `quote` that are the problem, each copied
+  exactly from `quote` and a few words long ("the only", "reduces"); [] when the problem
+  is the whole quote or something missing from it
+- `issue`: str, the problem in one or two short sentences: what is wrong and why it
+  matters, without restating the quote
 - `fix`: str, concrete suggested correction
 - `reference`: str, supporting reference or quote (empty string if none)
 - `source`: str, the source document or database the reference came from ("" if none)

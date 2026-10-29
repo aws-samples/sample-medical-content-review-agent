@@ -186,8 +186,34 @@ def _apply_decisions(
     }
 
 
-def _published_form(finding: dict) -> dict:
-    return {k: v for k, v in finding.items() if k not in PRIVATE_FIELDS}
+def _published_form(finding: dict, quote_group: str) -> dict:
+    out = {k: v for k, v in finding.items() if k not in PRIVATE_FIELDS}
+    out["check"] = check_kind(finding)
+    out["quote_group"] = quote_group
+    return out
+
+
+def quote_groups(findings: list[dict]) -> list[str]:
+    """Key the findings on the same quote alike, so the UI can show them on one card
+
+    Parameters
+    ----------
+    findings : list[dict]
+        Findings in report order, each with its `id`
+
+    Returns
+    -------
+    list[str]
+        For each finding, the id of the first finding on the same normalised quote; a
+        finding without a quote is a group of its own
+    """
+    first: dict[str, str] = {}
+    groups = []
+    for finding in findings:
+        quote = normalise(finding.get("quote"))
+        own = str(finding.get("id") or "")
+        groups.append(first.setdefault(quote, own) if quote else own)
+    return groups
 
 
 @tool
@@ -232,7 +258,10 @@ def publish_review(
     published.sort(
         key=lambda f: (0, f["page"]) if isinstance(f.get("page"), int) else (1, 0)
     )
-    report = [_published_form(f) for f in published]
+    report = [
+        _published_form(f, group)
+        for f, group in zip(published, quote_groups(published))
+    ]
 
     report_key = prefix + REPORT_NAME
     result = json.dumps(

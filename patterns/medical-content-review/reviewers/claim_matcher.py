@@ -40,6 +40,7 @@ from reviewers.claim_tags import (
     CLAIMS_SOURCE,
     MATCH_PRECISIONS,
     aligned,
+    changed_spans,
     is_segment,
     match_precision,
     normalise,
@@ -169,6 +170,19 @@ def _word_delta(text: str, approved: str) -> str:
     if not changes:
         return "the wording differs from the approved claim only in its layout."
     return "; ".join(changes) + "."
+
+
+def _change_headline(text: str, approved: str, claim_id: str) -> str:
+    """The first change from the approved wording, when it is short enough to headline"""
+    first = _word_delta(text, approved).split("; ")[0].rstrip(".")
+    if (
+        first.startswith("'")
+        and len(first.split()) <= 8
+        and not any(char.isdigit() for char in first)
+    ):
+        return f"{first} ({claim_id})"
+    return f"Wording differs from {claim_id}"
+
 
 
 def _render_library(library: list[dict]) -> str:
@@ -602,6 +616,7 @@ def _findings_from_matches(
                 {
                     "page": record["page"],
                     "quote": record["text"],
+                    "headline": f"{matched_id} is approved for another audience",
                     "issue": (
                         f"This claim is the wording of pre-approved claim {matched_id},"
                         f" but {record['unusable_reason']}. A claim may only be used"
@@ -622,10 +637,14 @@ def _findings_from_matches(
                 }
             )
         elif unusable:
+            status = str(library_claim.get("status") or "").strip()
+            # an Approved claim past its expiry date
+            status = "expired" if status.lower() in ("", "approved") else status
             findings.append(
                 {
                     "page": record["page"],
                     "quote": record["text"],
+                    "headline": f"{matched_id} is no longer usable ({status})",
                     "issue": (
                         f"This claim reuses pre-approved claim {matched_id}, but"
                         f" {record['unusable_reason']}. It may not be used in new"
@@ -658,6 +677,16 @@ def _findings_from_matches(
                 {
                     "page": record["page"],
                     "quote": record["text"],
+                    "headline": (
+                        f"Number changed: {record['numeric_changes'][0]}"
+                        if record["numeric_deviation"]
+                        else _change_headline(record["text"], approved_text, matched_id)
+                    ),
+                    "issue_spans": changed_spans(
+                        record["text"],
+                        approved_text,
+                        aligned(record["text"], approved_text),
+                    ),
                     "issue": (
                         f"Deviates from pre-approved claim {matched_id}: {deviation}"
                         f"{numbers} A reviewer has to confirm the change or the"

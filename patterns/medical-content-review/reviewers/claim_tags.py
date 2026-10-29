@@ -243,6 +243,51 @@ def same_wording(first: object, second: object) -> bool:
     return bool(key) and key == wording_key(second)
 
 
+# Spans covering more of a quote than this are the whole quote, not the words at issue
+MAX_SPAN_SHARE = 0.6
+MAX_SPANS = 5
+# A longer run is an added passage, which bold type would not make easier to read
+MAX_SPAN_WORDS = 8
+HEADLINE_WORDS = 12
+
+
+def raw_spans(quote: object, runs: list[list[str]]) -> list[str]:
+    """Map runs of normalised words back to the quote's own text
+
+    Parameters
+    ----------
+    quote : object
+        The finding's quote as written
+    runs : list[list[str]]
+        Runs of consecutive words in `normalise` form
+
+    Returns
+    -------
+    list[str]
+        The quote's substring for each run found in it, in quote order, without
+        duplicates
+    """
+    quote = str(quote or "")
+    tokens: list[tuple[str, int, int]] = []
+    for match in re.finditer(r"\S+", quote):
+        for word in normalise(match.group()).split():
+            tokens.append((word, match.start(), match.end()))
+    words = [word for word, _, _ in tokens]
+    found: list[tuple[int, str]] = []
+    for run in runs:
+        size = len(run)
+        if not size or size > len(words):
+            continue
+        for i in range(len(words) - size + 1):
+            if words[i : i + size] == run:
+                text = quote[tokens[i][1] : tokens[i + size - 1][2]]
+                text = text.strip(" ,.;:!?()[]\"'“”‘’*")
+                if text and all(text != t for _, t in found):
+                    found.append((tokens[i][1], text))
+                break
+    return [text for _, text in sorted(found)]
+
+
 # A number as `normalise` leaves it ("84%", "~9", "10+", "<0.0001"), not a name that
 # contains digits ("17a", "23i")
 NUMBER_TOKEN_RE = re.compile(r"^[~≥≤<>]?\d+(?:[.,]\d+)*[%+]?$")
@@ -291,6 +336,81 @@ def numeric_changes(text: str, approved: str) -> list[str]:
                 unit = []
             changes.append(f"'{' '.join(was + unit)}' became '{' '.join(now + unit)}'")
     return changes
+
+
+def changed_spans(
+    text: object, approved: object, matcher: SequenceMatcher | None = None
+) -> list[str]:
+    """The words of `text` that replace or add to the approved wording
+
+    Parameters
+    ----------
+    text : object
+        The content's wording
+    approved : object
+        The approved wording it deviates from
+    matcher : SequenceMatcher | None
+        An alignment of the approved words (a) with the content's (b), both in
+        `normalise` form, when the caller has a better one than the plain word diff
+
+    Returns
+    -------
+    list[str]
+        Substrings of `text`; empty when nothing was added or replaced, or when the
+        changes are most of the text
+    """
+    if matcher is None:
+        matcher = SequenceMatcher(
+            None, normalise(approved).split(), normalise(text).split(), autojunk=False
+        )
+    content = list(matcher.b)
+    runs = [
+        content[j1:j2]
+        for op, _, _, j1, j2 in matcher.get_opcodes()
+        if op in ("replace", "insert")
+    ]
+    if not content or sum(map(len, runs)) > MAX_SPAN_SHARE * len(content):
+        return []
+    return raw_spans(text, [r for r in runs if len(r) <= MAX_SPAN_WORDS])[:MAX_SPANS]
+
+
+def quoted_spans(quote: object, spans: object) -> list[str]:
+    """Keep the spans a model named that are words of the quote, in the quote's text"""
+    if not isinstance(spans, list):
+        return []
+    runs = [normalise(span).split() for span in spans if isinstance(span, str)]
+    found = raw_spans(quote, [r for r in runs if len(r) <= MAX_SPAN_WORDS])
+    total = len(normalise(quote).split())
+    if total and sum(len(normalise(s).split()) for s in found) > MAX_SPAN_SHARE * total:
+        return []
+    return found[:MAX_SPANS]
+
+
+def short_headline(text: object) -> str:
+    """The first sentence of a finding's issue, cut to a headline's length"""
+    sentence = re.split(r"(?<=[.!?])\s+", str(text or "").strip(), maxsplit=1)[0]
+    words = sentence.split()
+    if len(words) <= HEADLINE_WORDS:
+        return sentence.rstrip(".")
+    return " ".join(words[:HEADLINE_WORDS]).rstrip(",;:.") + " …"
+
+
+def readable(findings: list[dict]) -> list[dict]:
+    """Give every finding a `headline` and `issue_spans` the quote holds"""
+    out = []
+    for finding in findings:
+        finding = dict(finding)
+        headline = str(finding.get("headline") or "").strip()
+        finding["headline"] = (
+            short_headline(headline)
+            if headline
+            else short_headline(finding.get("issue"))
+        )
+        finding["issue_spans"] = quoted_spans(
+            finding.get("quote"), finding.get("issue_spans")
+        )
+        out.append(finding)
+    return out
 
 
 def _coverage(short: list[str], long: list[str]) -> float:
