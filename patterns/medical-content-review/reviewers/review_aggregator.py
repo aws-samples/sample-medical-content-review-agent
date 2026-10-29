@@ -5,19 +5,26 @@
 import json
 import re
 
-import boto3
 from strands import tool
+from utils.s3 import list_keys, put_json, read_json, require_bucket, safe_session_id
 
-from reviewers._common import REVIEWS_PREFIX, STAGING_BUCKET, write_local_file
-from reviewers.claim_tags import load_claim_records, tag_findings
-
-s3_client = boto3.client("s3")
+from reviewers._common import REVIEWS_PREFIX, claims_report_key
+from reviewers.claim_tags import tag_findings
+from reviewers.report import AGGREGATE_NAME, merge_repeats
 
 REVIEWER_KIND_RE = re.compile(
     r"/(?P<kind>generic|external|internal|claims)_[^/]+\.json$"
 )
 REVIEWER_KINDS = ("generic", "external", "internal", "claims")
-LOCAL_AGGREGATE_PATH = "/tmp/all_findings.json"  # noqa: S108  # nosec B108
+
+
+def load_claim_records(session_id: str) -> list[dict]:
+    """The session's tagged claims, or [] when the run had no claims library"""
+    report = read_json(claims_report_key(session_id))
+    claims = report.get("claims") if isinstance(report, dict) else report
+    if not isinstance(claims, list):
+        return []
+    return [claim for claim in claims if isinstance(claim, dict)]
 
 
 @tool
@@ -26,17 +33,10 @@ def get_reviews(session_id: str) -> str:
 
     Reads every file under `s3://{STAGING_BUCKET}/reviews/{session_id}/`, tags each
     finding with the reviewer that produced it (`"generic" | "external" | "internal"
-    | "claims"`), sorts findings by page number, then persists the result in TWO places:
-
-    1. `s3://{STAGING_BUCKET}/reviews/{session_id}/all_findings.json` — the durable
-       record, used for auditing the editor's dedupe decisions after the fact.
-    2. `/tmp/all_findings.json` — local to the AgentCore Runtime container, so the
-       orchestrator can load the full aggregate with `file_read` instead of having
-       the whole payload flow through its context window (where the model may
-       implicitly summarise or drop items).
-
-    Returns a short JSON pointer — the editor is expected to call
-    `file_read("/tmp/all_findings.json")` next to see every finding verbatim.
+    | "claims"`), sorts findings by page number, merges same-kind repeats of a quote into
+    one finding listing every page, gives each finding an id (`F1`, ...), and writes
+    the result to `s3://{STAGING_BUCKET}/reviews/{session_id}/all_findings.json`, which
+    the editor reads and `publish_review` publishes from.
 
     Parameters
     ----------
@@ -47,41 +47,25 @@ def get_reviews(session_id: str) -> str:
     -------
     str
         A JSON pointer of shape:
-        `{"local_path": "/tmp/all_findings.json",
-          "aggregate_s3_uri": "s3://...",
+        `{"aggregate_s3_uri": "s3://...",
           "counts": {"generic": N, "external": N, "internal": N, "claims": N},
-          "total": N,
-          "instruction": "Call file_read('/tmp/all_findings.json') to load every
-                          finding verbatim before editing."}`
+          "total": N, "repeats_merged": N}`
     """
-    if not STAGING_BUCKET:
-        raise RuntimeError("STAGING_BUCKET_NAME environment variable is not set")
+    require_bucket()
+    prefix = f"{REVIEWS_PREFIX}/{safe_session_id(session_id)}/"
 
-    safe_session = re.sub(r"[^a-zA-Z0-9_-]", "_", session_id)
-    prefix = f"{REVIEWS_PREFIX}/{safe_session}/"
-
-    paginator = s3_client.get_paginator("list_objects_v2")
     findings: list[dict] = []
     counts = dict.fromkeys(REVIEWER_KINDS, 0)
-    for page in paginator.paginate(Bucket=STAGING_BUCKET, Prefix=prefix):
-        for obj in page.get("Contents") or []:
-            key = obj["Key"]
-            match = REVIEWER_KIND_RE.search(key)
-            if not match:
-                continue
-            kind = match.group("kind")
-            body = s3_client.get_object(Bucket=STAGING_BUCKET, Key=key)["Body"].read()
-            try:
-                data = json.loads(body)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(data, list):
-                continue
-            for item in data:
-                if isinstance(item, dict):
-                    item = {**item, "reviewer": kind}
-                    findings.append(item)
-                    counts[kind] += 1
+    for key in list_keys(prefix):
+        match = REVIEWER_KIND_RE.search(key)
+        data = read_json(key) if match else None
+        if not isinstance(data, list):
+            continue
+        kind = match.group("kind")
+        for item in data:
+            if isinstance(item, dict):
+                findings.append({**item, "reviewer": kind})
+                counts[kind] += 1
 
     # Sort by page (missing/non-int page sinks to the end), preserving within-page
     # order for stability.
@@ -94,27 +78,18 @@ def get_reviews(session_id: str) -> str:
     # Re-derive the claim match tag in Python: a reviewer may have left it out, and the
     # tag has to be on every finding, not only the ones the model remembered to mark.
     findings = tag_findings(findings, load_claim_records(session_id))
-
-    aggregate_key = f"{prefix}all_findings.json"
-    body = json.dumps({"findings": findings, "counts": counts}, indent=2).encode(
-        "utf-8"
-    )
-    s3_client.put_object(
-        Bucket=STAGING_BUCKET,
-        Key=aggregate_key,
-        Body=body,
-        ContentType="application/json",
-    )
-    write_local_file(LOCAL_AGGREGATE_PATH, body)
+    reported = len(findings)
+    findings = [
+        {"id": f"F{index + 1}", **finding}
+        for index, finding in enumerate(merge_repeats(findings))
+    ]
 
     pointer = {
-        "local_path": LOCAL_AGGREGATE_PATH,
-        "aggregate_s3_uri": f"s3://{STAGING_BUCKET}/{aggregate_key}",
+        "aggregate_s3_uri": put_json(
+            f"{prefix}{AGGREGATE_NAME}", {"findings": findings, "counts": counts}
+        ),
         "counts": counts,
         "total": len(findings),
-        "instruction": (
-            f"Call file_read('{LOCAL_AGGREGATE_PATH}') next to load every finding"
-            " verbatim before you start editing the final report."
-        ),
+        "repeats_merged": reported - len(findings),
     }
     return json.dumps(pointer)

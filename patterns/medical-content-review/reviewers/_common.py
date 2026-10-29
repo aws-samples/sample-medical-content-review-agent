@@ -1,12 +1,10 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
-"""Shared helpers for the three reviewer sub-agents.
+"""Shared helpers for the reviewer sub-agents.
 
-Each reviewer is a `@tool` exposed to the orchestrator. Internally it spins up
-a narrow Strands Agent with just the tools it needs, runs a single review on
-one batch markdown, and writes its findings JSON to S3. Only the S3 URI of
-the written JSON is returned to the orchestrator — reviewer output never
-flows through the orchestrator's context window.
+Each reviewer is a `@tool` the review pipeline calls once per batch. It runs a narrow
+Strands Agent with just the tools it needs on one batch markdown, and writes its
+findings JSON to S3, returning only the S3 URI.
 """
 
 from __future__ import annotations
@@ -16,18 +14,21 @@ import os
 import re
 from pathlib import Path, PurePosixPath
 
-import boto3
 from strands import Agent
 from strands.models import BedrockModel, CacheConfig
+from tools.run_record import note_issue
 from utils.inference import (
     get_bedrock_config,
     get_inference_configs,
     sampling_params,
 )
-
-from reviewers.claim_tags import claims_library_expected
-
-s3_client = boto3.client("s3")
+from utils.s3 import (
+    parse_s3_uri,
+    put_json,
+    read_text,
+    require_bucket,
+    safe_session_id,
+)
 
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
@@ -43,53 +44,14 @@ MODEL_ID = os.environ.get(
     "REVIEWER_MODEL_ID",
     os.environ.get("MODEL_ID", "global.anthropic.claude-sonnet-5"),
 )
-STAGING_BUCKET = os.environ.get("STAGING_BUCKET_NAME")
 REVIEWS_PREFIX = "reviews"
 CLAIMS_PREFIX = "claims"
+# kept under the name the reviewers import it by
+read_s3_text = read_text
 
 
-# The orchestrator prompt names the container-local paths the aggregators write, so the
-# filenames are fixed and cannot be randomised. `O_NOFOLLOW` and `O_CREAT` are what make
-# a fixed name under a shared /tmp safe: a symlink or a file planted there beforehand
-# cannot redirect the write, and 0600 keeps the review out of reach of another user.
-LOCAL_FILE_MODE = 0o600
-LOCAL_FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
-
-
-def write_local_file(path: str, body: bytes) -> None:
-    """Write a container-local file the orchestrator will read back with `file_read`
-
-    Parameters
-    ----------
-    path : str
-        Absolute path inside the runtime container, as named in the prompt
-    body : bytes
-        Bytes to write, replacing whatever the file held before
-
-    Raises
-    ------
-    OSError
-        When the path is a symlink, which is the case this guards against
-    """
-    fd = os.open(path, LOCAL_FILE_FLAGS, LOCAL_FILE_MODE)
-    with os.fdopen(fd, "wb") as f:
-        f.write(body)
-
-
-def _require_bucket() -> str:
-    if not STAGING_BUCKET:
-        raise RuntimeError("STAGING_BUCKET_NAME environment variable is not set")
-    return STAGING_BUCKET
-
-
-def parse_s3_uri(s3_uri: str) -> tuple[str, str]:
-    path = s3_uri[5:]
-    return path.split("/", 1)
-
-
-def read_s3_text(s3_uri: str) -> str:
-    bucket, key = parse_s3_uri(s3_uri)
-    return s3_client.get_object(Bucket=bucket, Key=key)["Body"].read().decode("utf-8")
+def claims_report_key(session_id: str) -> str:
+    return f"{CLAIMS_PREFIX}/{safe_session_id(session_id)}/claims_report.json"
 
 
 def read_s3_json(s3_uri: str) -> list | dict:
@@ -106,21 +68,9 @@ def batch_stem(batch_md_s3_uri: str) -> str:
     return PurePosixPath(key).stem
 
 
-def safe_session_id(session_id: str) -> str:
-    """Reduce a session id to the characters that are safe inside an S3 key."""
-    return re.sub(r"[^a-zA-Z0-9_-]", "_", session_id)
-
-
 def _write_json(prefix: str, session_id: str, name: str, payload: list | dict) -> str:
-    bucket = _require_bucket()
-    key = f"{prefix}/{safe_session_id(session_id)}/{name}.json"
-    s3_client.put_object(
-        Bucket=bucket,
-        Key=key,
-        Body=json.dumps(payload, indent=2).encode("utf-8"),
-        ContentType="application/json",
-    )
-    return f"s3://{bucket}/{key}"
+    require_bucket()
+    return put_json(f"{prefix}/{safe_session_id(session_id)}/{name}.json", payload)
 
 
 def write_review_json(
@@ -169,61 +119,6 @@ NO_CLAIMS_CONTEXT = (
     "(no pre-approved claims library was provided for this review — treat every claim"
     " in the batch as unverified)"
 )
-
-CLAIMS_WORKFLOW_ERROR = (
-    "ERROR: this review was given a pre-approved claims library, so claim extraction and"  # noqa: E501
-    " matching are mandatory and must finish before any reviewer runs. Call"
-    " `extract_claims` for every batch, then `match_claims` for every batch, then call"
-    " this reviewer again passing the batch's `matched_claims_s3_uri`."
-)
-
-# Batches already sent back once for missing matched claims, so the guard asks for the
-# claims workflow but cannot trap a run in a loop
-_CLAIMS_REFUSED: set[tuple[str, str]] = set()
-
-
-def claims_workflow_error(
-    session_id: str, matched_claims_s3_uri: str | None, batch_md_s3_uri: str
-) -> str | None:
-    """Refuse a reviewer that skipped the claims workflow the request asked for
-
-    Whether a claims library exists comes from the request payload, not from the
-    orchestrator, so a model that decides to skip extraction and matching is stopped
-    here rather than quietly producing a review with no claim context. Reviews without a
-    library are unaffected: nothing is expected, so nothing is refused.
-
-    Each batch is refused at most once. If matching genuinely cannot produce a result —
-    an unparsable spreadsheet, a failing claims write — the second attempt goes through
-    and the run degrades to a review without claim tags, which is far better than a run
-    that never finishes.
-
-    Parameters
-    ----------
-    session_id : str
-        The same `session_id` the reviewer was called with
-    matched_claims_s3_uri : str | None
-        The batch's matched-claims URI as passed by the orchestrator
-    batch_md_s3_uri : str
-        The batch the reviewer was asked to review, so each batch is refused once
-
-    Returns
-    -------
-    str | None
-        The error to return to the orchestrator, or None when the reviewer may proceed
-    """
-    if matched_claims_s3_uri or not claims_library_expected(session_id):
-        return None
-
-    key = (session_id, batch_md_s3_uri)
-    if key in _CLAIMS_REFUSED:
-        print(
-            f"[CLAIMS] {batch_md_s3_uri} still has no matched claims — reviewing it"
-            " without claim context rather than blocking the run"
-        )
-        return None
-    _CLAIMS_REFUSED.add(key)
-    return CLAIMS_WORKFLOW_ERROR
-
 
 def build_claims_context(matched_claims_s3_uri: str | None) -> str:
     """Summarise a batch's claim-match results for a downstream reviewer's prompt.
@@ -301,32 +196,68 @@ def run_inner_agent_text(
     return str(agent(user_prompt))
 
 
+# a backslash that starts no JSON escape
+INVALID_ESCAPE_RE = re.compile(r'\\(?!["\\/bfnrtu])')
+
+
+def _tagged_json_array(text: str, tag: str) -> list[dict] | None:
+    """The last JSON array of objects in `<tag>...</tag>`, or None when there is none
+
+    Falls back to parsing the whole response when the tag is absent. When the model
+    emits several tagged blocks ("Wait, correcting: ..."), the last one that parses is
+    its answer.
+    """
+    blocks = re.findall(rf"<{tag}>(.*?)</{tag}>", text, re.DOTALL) or [text]
+    for block in reversed(blocks):
+        # Strip accidental ```json fences
+        payload = re.sub(r"^```(?:json)?\s*|\s*```$", "", block.strip()).strip()
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            # copy quoted from markdown keeps its escapes ("\*All trials ..."), which
+            # are not JSON escapes
+            try:
+                data = json.loads(INVALID_ESCAPE_RE.sub(r"\\\\", payload))
+            except json.JSONDecodeError:
+                continue
+        if isinstance(data, list):
+            return [x for x in data if isinstance(x, dict)]
+    return None
+
+
 def parse_tagged_json_array(text: str, tag: str) -> list[dict]:
     """Pull one JSON array of objects out of `<tag>...</tag>` in a model response.
 
     Falls back to parsing the whole response when the tag is absent, and returns
-    an empty list when the payload is not a JSON array of objects.
+    an empty list when no payload is a JSON array of objects.
     """
-    match = re.search(rf"<{tag}>(.*?)</{tag}>", text, re.DOTALL)
-    payload = match.group(1).strip() if match else text.strip()
-
-    # Strip accidental ```json fences
-    payload = re.sub(r"^```(?:json)?\s*|\s*```$", "", payload).strip()
-
-    try:
-        data = json.loads(payload)
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(data, list):
-        return []
-    return [x for x in data if isinstance(x, dict)]
+    return _tagged_json_array(text, tag) or []
 
 
 def run_inner_agent(
     system_prompt: str,
     user_prompt: str,
     tools: list,
-) -> list[dict]:
-    """Run a narrow sub-agent. It must emit a single JSON array in <findings> tags."""
+) -> list[dict] | None:
+    """Run a narrow sub-agent that answers with one JSON array in <findings> tags
+
+    Returns None when the reply holds no parsable array, so a reply with no answer is
+    told apart from an empty answer.
+    """
     text = run_inner_agent_text(system_prompt, user_prompt, tools)
-    return parse_tagged_json_array(text, "findings")
+    return _tagged_json_array(text, "findings")
+
+
+def reviewer_findings(
+    findings: list[dict] | None, session_id: str, stage: str, batch: str
+) -> list[dict]:
+    """Findings to save for a batch, noting a reply that had none to parse"""
+    if findings is None:
+        note_issue(
+            session_id,
+            stage,
+            "the reviewer's reply had no parsable findings",
+            batch=batch,
+        )
+        return []
+    return findings

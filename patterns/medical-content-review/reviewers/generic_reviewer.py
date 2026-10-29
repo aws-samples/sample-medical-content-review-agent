@@ -9,6 +9,7 @@ from reviewers._common import (
     batch_stem,
     load_prompt,
     read_s3_text,
+    reviewer_findings,
     run_inner_agent,
     write_review_json,
 )
@@ -20,7 +21,7 @@ SYSTEM_PROMPT = load_prompt("generic_reviewer").format(schema=FINDINGS_SCHEMA_HI
 def run_generic_review(batch_md_s3_uri: str, session_id: str) -> str:
     """Run the generic reviewer on a single batch markdown and save findings to S3.
 
-    Internally spins up a narrow sub-agent that checks spelling, grammar,
+    Runs a narrow sub-agent that checks spelling, grammar,
     language exaggeration, and figure/image description consistency. The
     sub-agent has no external tools — it works purely off the provided batch
     markdown.
@@ -30,7 +31,7 @@ def run_generic_review(batch_md_s3_uri: str, session_id: str) -> str:
     batch_md_s3_uri : str
         S3 URI of a batch markdown file produced by `batch_content`.
     session_id : str
-        The orchestrator's runtime session id, used to namespace review outputs
+        The review's runtime session id, used to namespace review outputs
         under `reviews/{session_id}/`.
 
     Returns
@@ -44,6 +45,6 @@ def run_generic_review(batch_md_s3_uri: str, session_id: str) -> str:
         user_prompt=f"Review this batch:\n\n{markdown}",
         tools=[],
     )
-    return write_review_json(
-        session_id, "generic", batch_stem(batch_md_s3_uri), findings
-    )
+    stem = batch_stem(batch_md_s3_uri)
+    findings = reviewer_findings(findings, session_id, "generic_review", stem)
+    return write_review_json(session_id, "generic", stem, findings)

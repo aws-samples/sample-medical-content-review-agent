@@ -13,15 +13,9 @@ included ("Excelent Safety Profile"), while the claim record holds the same sent
 full. Nothing here changes a tag the claim matcher itself produced.
 """
 
-import json
 import re
 from difflib import SequenceMatcher
-from pathlib import Path
 
-# The claims report lives in the container, so it has to be keyed by session: an
-# AgentCore Runtime container is reused across invocations, and a review without a
-# claims library must never inherit the previous review's claims.
-CLAIMS_REPORT_DIR = "/tmp"  # noqa: S108  # nosec B108
 CLAIM_MATCH_STATUSES = ("exact", "partial", "none")
 
 # The two kinds of exact match: approved copy reused as written, and approved copy whose
@@ -157,103 +151,6 @@ def same_wording(first: object, second: object) -> bool:
     return bool(key) and key == wording_key(second)
 
 
-def claims_report_path(session_id: str) -> str:
-    """Compute the container-local path of a session's claims report
-
-    Kept here rather than in `reviewers._common` so that the tagging helpers stay
-    importable without the Bedrock dependencies the reviewers pull in.
-
-    Parameters
-    ----------
-    session_id : str
-        The runtime session id the review is running under
-
-    Returns
-    -------
-    str
-        Path `get_claims` writes the session's claims report to
-    """
-    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", str(session_id)) or "default"
-    return f"{CLAIMS_REPORT_DIR}/claims_report_{safe}.json"
-
-
-def claims_library_marker_path(session_id: str) -> str:
-    """Compute the path of the marker saying this session has a claims library
-
-    Parameters
-    ----------
-    session_id : str
-        The runtime session id the review is running under
-
-    Returns
-    -------
-    str
-        Path of the session's claims-library marker
-    """
-    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", str(session_id)) or "default"
-    return f"{CLAIMS_REPORT_DIR}/claims_library_{safe}.json"
-
-
-def set_claims_library_expected(session_id: str, claims_uri: str) -> None:
-    """Record whether this review was given a claims library
-
-    Written from the request payload, before the orchestrator runs, so that whether the
-    claims workflow is mandatory is a fact about the request rather than something the
-    model decides. The reviewers refuse to run without matched claims when it is set.
-
-    Parameters
-    ----------
-    session_id : str
-        The runtime session id the review is running under
-    claims_uri : str
-        S3 URI of the uploaded claims spreadsheet, empty when there is none
-    """
-    marker = Path(claims_library_marker_path(session_id))
-    try:
-        if claims_uri:
-            marker.write_text(json.dumps({"claims_uri": claims_uri}))
-        else:
-            marker.unlink(missing_ok=True)
-    except OSError as e:
-        print(f"[CLAIMS] Could not record the claims library marker: {e}")
-
-
-def claims_library_expected(session_id: str) -> bool:
-    """Say whether this review was given a claims library, so matching is mandatory"""
-    return Path(claims_library_marker_path(session_id)).exists()
-
-
-def load_claim_records(session_id: str) -> list[dict]:
-    """Load the tagged claims of this session, or an empty list if there are none
-
-    Reads the report `get_claims` leaves in the container for this session. An empty
-    list means the run had no claims library (or ran in a different container), in
-    which case findings stay untagged — the fail-safe outcome, since tagging findings
-    against another session's claims would be worse than not tagging them at all.
-
-    Parameters
-    ----------
-    session_id : str
-        The runtime session id the review is running under
-
-    Returns
-    -------
-    list[dict]
-        Claim records as written by `match_claims`
-    """
-    report_path = Path(claims_report_path(session_id))
-    if not report_path.exists():
-        return []
-    try:
-        report = json.loads(report_path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return []
-    claims = report.get("claims") if isinstance(report, dict) else report
-    if not isinstance(claims, list):
-        return []
-    return [claim for claim in claims if isinstance(claim, dict)]
-
-
 def _coverage(short: list[str], long: list[str]) -> float:
     """Score what share of the shorter word list appears in the longer one
 
@@ -368,7 +265,7 @@ def tag_findings(findings: list[dict], claims: list[dict]) -> list[dict]:
     findings : list[dict]
         Reviewer findings
     claims : list[dict]
-        Claim records from `load_claim_records`
+        Claim records from the claims report
 
     Returns
     -------
@@ -387,7 +284,7 @@ def tag_findings(findings: list[dict], claims: list[dict]) -> list[dict]:
         precision = str(finding.get("claim_precision") or "")
         known = status in CLAIM_MATCH_STATUSES
 
-        # An exact match without its kind is also incomplete: the orchestrator may have
+        # An exact match without its kind is also incomplete: a reviewer may have
         # carried the status through and dropped the qualifier.
         if not known or (status == "exact" and not precision):
             claim = _best_claim(finding, pairs) or {}
