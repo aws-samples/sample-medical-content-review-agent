@@ -23,7 +23,6 @@ MODEL_ID = os.environ.get(
     os.environ.get("MODEL_ID", "global.anthropic.claude-sonnet-5"),
 )
 STAGING_BUCKET = os.environ.get("STAGING_BUCKET_NAME")
-MARKDOWN_PREFIX = "markdowns"
 
 SYSTEM = (Path(__file__).parent.parent / "prompts" / "batch_content.txt").read_text()
 
@@ -37,6 +36,11 @@ PROMPT_TEMPLATE = (
 PAGE_PATTERN = re.compile(r"\[page (\d+)\]\n(.*?)\n\[/page \1\]", re.DOTALL)
 AUDIENCE_RE = re.compile(r"<audience>\s*(hcp|patient)\s*</audience>", re.IGNORECASE)
 AUDIENCE_REASON_RE = re.compile(r"<audience_reason>(.*?)</audience_reason>", re.DOTALL)
+
+# A layout indicator page repeats, possibly out of date, the copy of the other pages and
+# says it is not for content review, so no reviewer gets to see its content
+LAYOUT_NOTICE_RE = re.compile(r"not\s+intended\s+for\s+content\s+review", re.IGNORECASE)
+LAYOUT_STUB = "(layout indicator, not for content review)"
 
 
 def _parse_s3_uri(s3_uri: str) -> tuple[str, str]:
@@ -53,7 +57,10 @@ def _parse_tagged(text: str, tag: str) -> str:
 def _load_pages(markdown: str) -> dict[int, str]:
     pages: dict[int, str] = {}
     for match in PAGE_PATTERN.finditer(markdown):
-        pages[int(match.group(1))] = match.group(2).strip()
+        text = match.group(2).strip()
+        pages[int(match.group(1))] = (
+            LAYOUT_STUB if LAYOUT_NOTICE_RE.search(text) else text
+        )
     return pages
 
 
@@ -125,7 +132,35 @@ def batch_content(markdown_s3_uri: str, session_id: str = "") -> str:
                 severity="warning",
             )
 
-    stem = PurePosixPath(key).stem
+    batched = {p for page_nums in batch_page_lists for p in page_nums}
+    invented = sorted(p for p in batched if p not in pages)
+    if invented and session_id:
+        note_issue(
+            session_id,
+            "batch",
+            f"the batcher listed pages {invented}, which the document does not have",
+            severity="warning",
+        )
+    # an invented page would leave a batch with nothing to review
+    batch_page_lists = [
+        [p for p in page_nums if p in pages] for page_nums in batch_page_lists
+    ]
+    batch_page_lists = [page_nums for page_nums in batch_page_lists if page_nums]
+    left_out = sorted(p for p in pages if p not in batched)
+    if left_out:
+        # a page in no batch would never be reviewed
+        batch_page_lists.append(left_out)
+        if session_id:
+            note_issue(
+                session_id,
+                "batch",
+                f"the batcher left out pages {left_out}; they are reviewed as an extra"
+                " batch",
+                severity="warning",
+            )
+
+    # Batches sit next to their source markdown, which is already namespaced by session
+    source = PurePosixPath(key)
     written: list[dict] = []
     for i, page_nums in enumerate(batch_page_lists, start=1):
         parts = [
@@ -135,7 +170,7 @@ def batch_content(markdown_s3_uri: str, session_id: str = "") -> str:
             f"# Batch {i} (pages {', '.join(map(str, page_nums))})\n\n"
             + "\n\n".join(parts)
         )
-        out_key = f"{MARKDOWN_PREFIX}/{stem}_batch_{i}.md"
+        out_key = f"{source.parent}/{source.stem}_batch_{i}.md"
         s3_client.put_object(
             Bucket=STAGING_BUCKET,
             Key=out_key,

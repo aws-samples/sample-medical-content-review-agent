@@ -192,7 +192,7 @@ async def _review(inputs: ReviewInputs, steps: _Steps) -> None:
         for i, uri in enumerate(inputs.reference_uris)
     ]
     reading = [
-        steps.run(process_pdf, s3_uri=uri, original_filename=name)
+        steps.run(process_pdf, s3_uri=uri, original_filename=name, session_id=sid)
         for uri, name in documents
     ]
     if inputs.claims_uri:
