@@ -11,7 +11,7 @@ Claims that reuse an approved wording word for word, in any order, have already 
 in code and are not in your list. Your job is the judgement code cannot make: whether a
 differently worded sentence makes the same assertion as an approved claim.
 
-Pre-approved claims library:
+{audience}Pre-approved claims library:
 {library}
 
 For each extracted claim, pick the ONE library claim that makes the same assertion (if any)
@@ -29,26 +29,52 @@ and assign a status:
   - stronger or absolute language than the approved wording ("remarkable", "completely",
     "all patients", "proven")
   - a comparator or placebo arm that has been removed
+  - a change of tense or certainty ("reduced" to "reduces", "may" to "will")
+  - an implied comparison the approved claim does not make ("better", "more", "faster")
   - the approved claim's meaning narrowed or broadened
+  - an approximate number stated as exact ("9 of 10" for the approved "~9 of 10"), or an
+    exact number made approximate
 - `none` — no library claim makes this assertion at all. This is NOT a verdict on the claim:
   it only means the claim has to be substantiated elsewhere. Say `none` freely.
 
 Rules:
 - Judge meaning, not string overlap. Two claims about the same endpoint with different
   numbers are `partial`, not `none` — the number is exactly the deviation a reviewer needs.
+- `partial` needs the same product, endpoint or outcome, and population as the library
+  claim: a reviewer would call the content an edited version of that claim. Sharing a
+  topic, a study name or a few words is not enough; that is `none`.
+- Check a claim that states several facts (a result, its numbers, timepoint, population,
+  comparator, study) fact by fact against the library claim. Every fact that differs is
+  part of the deviation; name each one.
 - A claim that is *about* an approved topic but asserts something the library never approved
   (e.g. long-term safety, absence of interactions, suitability for everyone) is `none`.
 - Never invent a library claim id. Use the ids exactly as given above.
 - Match against every library claim, including ones whose status is not "Approved" — flagging
   reuse of a withdrawn claim is handled downstream, your job is only to identify the match.
+- The library keeps old versions next to current ones. When several library claims make the
+  same assertion, pick the one with status "Approved", even if an Expired, Withdrawn, Draft or
+  Work in Progress version is worded closer to the content. Pick a non-approved version only
+  when no Approved claim makes the assertion.
+- A library entry may bundle several lines (a headline and its subline). An extracted claim
+  that makes the assertion of one line matches that entry; judge it against that line only.
+- Footnote markers (`^1*`, `¹`, `†`) and layout notes in square brackets (`[Headline]`,
+  `[Body copy]`) are not part of the wording.
 - Every extracted claim must appear exactly once in your output.
 
 Output exactly one JSON array wrapped in <matches></matches> tags. Each object has:
 - `claim_ref`: str, the ref of the extracted claim, copied verbatim
 - `match_status`: str, "exact" | "partial" | "none"
 - `matched_claim_id`: str, id of the library claim ("" when status is "none")
+- `nearest_claim_id`: str, for "none" the id of the library claim closest in meaning, ""
+  when none is related; "" for "exact" and "partial"
+- `similarity`: int 0-100, how closely the content's assertion matches the library claim
+  (`matched_claim_id`, or `nearest_claim_id` for "none"; 0 when there is neither). 100
+  is the same assertion in the same words, 75-99 the same assertion with a deviation a
+  reviewer must see, 50-74 the same claim changed in substance (a different number,
+  timepoint or population), below 50 a different assertion. A "partial" is 50 or more,
+  a "none" below 50.
 - `deviation`: str, for "partial" one sentence naming precisely what differs from the
-  approved wording; for "none" one short phrase saying what is being asserted that the
+  approved wording, quoting any changed number as "X became Y"; for "none" one short phrase saying what is being asserted that the
   library does not cover; "" for "exact"
 
 Output nothing else.

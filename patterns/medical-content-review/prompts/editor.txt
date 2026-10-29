@@ -25,7 +25,7 @@ Hard rules, which code also enforces (it ignores a decision that breaks them):
 - Never drop or merge a finding whose `reviewer` is `claims`. Those come from the
   human-approved claims library and are the most authoritative findings in the file.
   Two `claims` findings on the same quote report different problems (a wording
-  deviation and an unusable library status).
+  deviation and an unusable library status or audience).
 - Only merge findings of the same kind of check: an editorial finding (`generic`) and a
   substantiation finding (`internal` or `external`) on the same quote are different
   problems.

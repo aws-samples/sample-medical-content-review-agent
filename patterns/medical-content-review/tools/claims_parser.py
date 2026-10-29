@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import html
 import io
 import re
 from collections import Counter
@@ -42,6 +43,8 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "substantiation",
         "evidence",
         "support",
+        "references",
+        "reference_s",
     ),
     "source": ("source_document", "source", "document", "reference_document"),
     "audience": ("audience", "target_audience", "channel", "channels"),
@@ -132,7 +135,49 @@ def stringify(value: object) -> str:
         return value.isoformat()
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
-    return str(value).strip()
+    return clean_text(str(value))
+
+
+# Excel's escape for a carriage return, which some exports write out literally
+_XML_CR = re.compile(r"_x000D_", re.IGNORECASE)
+# Only the tags rich-text exports emit, so a literal "<" in copy ("p<0.001") survives
+_HTML_TAG = re.compile(
+    r"<!--.*?-->|</?(?:div|p|span|br|strong|b|em|i|u|ul|ol|li|sub|font|a)\b[^>]*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_HTML_BREAK = re.compile(r"<br\b[^>]*>|</(?:div|p|li)>", re.IGNORECASE)
+# Superscripts become the caret markers the plain claim text already uses ("^1*")
+_HTML_SUP = re.compile(r"<sup\b[^>]*>(.*?)</sup>", re.IGNORECASE | re.DOTALL)
+
+
+def clean_text(text: str) -> str:
+    """Turn an exported rich-text cell into plain text, keeping its line structure
+
+    Parameters
+    ----------
+    text : str
+        The cell text, possibly HTML from a rich-text field and carrying literal
+        ``_x000D_`` escapes
+
+    Returns
+    -------
+    str
+        Plain text with one line per paragraph and no blank-line runs
+    """
+    text = _XML_CR.sub("", text).replace("\r", "")
+    if _HTML_TAG.search(text) or _HTML_SUP.search(text):
+        text = text.replace("\n", " ")
+        text = _HTML_SUP.sub(
+            lambda m: "^" + _HTML_TAG.sub("", _HTML_BREAK.sub("\n", m.group(1))), text
+        )
+        text = _HTML_BREAK.sub("\n", text)
+        text = html.unescape(_HTML_TAG.sub("", text)).replace("\xa0", " ")
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.split("\n")]
+    out: list[str] = []
+    for line in lines:
+        if line or (out and out[-1]):
+            out.append(line)
+    return "\n".join(out).strip()
 
 
 def _map_headers(row: tuple) -> dict[int, tuple[str, str | None]]:
@@ -322,11 +367,15 @@ def parse_xlsx(body: bytes) -> dict:
 
     workbook = load_workbook(io.BytesIO(body), read_only=True, data_only=True)
     result = parse_rows([])
+    # The export tool stamps the workbook's creation time, which is when the library
+    # was pulled; resaving the file later only changes the modified time
+    created = workbook.properties.created
     try:
         for sheet in workbook.worksheets:
             rows = [tuple(row) for row in sheet.iter_rows(values_only=True)]
             parsed = parse_rows(rows)
             if parsed["claims"]:
+                parsed["export_date"] = created.date().isoformat() if created else ""
                 return parsed
             if parsed["headers_seen"] and not result["headers_seen"]:
                 result = parsed
@@ -392,6 +441,13 @@ def parse_claims_file(body: bytes, filename: str) -> dict:
             f" {seen}. The file needs a header row with a claim text column (e.g."
             " `claim_text`, `claim`, `approved claim wording`) and one claim per row."
         )
+
+    # Carried on every claim so the matcher judges expiry on the day the library was
+    # exported, not on the day of the run
+    export_date = parsed.get("export_date", "")
+    if export_date:
+        for claim in parsed["claims"]:
+            claim["library_as_of"] = export_date
 
     parsed["by_status"] = dict(
         Counter(claim["status"] or "Approved" for claim in parsed["claims"])

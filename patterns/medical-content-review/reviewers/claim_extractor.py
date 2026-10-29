@@ -5,15 +5,18 @@
 import json
 
 from strands import tool
+from tools.content_batcher import PAGE_PATTERN
+from tools.run_record import note_issue
+from utils.s3 import read_text
 
 from reviewers._common import (
     batch_stem,
     load_prompt,
     parse_tagged_json_array,
-    read_s3_text,
     run_inner_agent_text,
     write_claims_json,
 )
+from reviewers.claim_tags import normalise
 
 SYSTEM_PROMPT = load_prompt("claim_extractor")
 
@@ -28,8 +31,40 @@ VALID_CLAIM_TYPES = {
     "other",
 }
 
+EXTRACT_ATTEMPTS = 2
+# Share of a claim's words a page must hold to be taken as the page it came from
+MIN_PAGE_OVERLAP = 0.8
 
-def _normalise(raw_claims: list[dict], stem: str) -> list[dict]:
+
+def _batch_pages(markdown: str) -> dict[int, str]:
+    return {
+        int(m.group(1)): normalise(m.group(2)) for m in PAGE_PATTERN.finditer(markdown)
+    }
+
+
+def _locate(text: str, pages: dict[int, str]) -> int:
+    """The batch page a claim's text comes from, or 0 when no page clearly holds it"""
+    if len(pages) == 1:
+        return next(iter(pages))
+    claim = normalise(text)
+    holding = [page for page, body in pages.items() if f" {claim} " in f" {body} "]
+    if len(holding) == 1:
+        return holding[0]
+    words = set(claim.split())
+    if not words:
+        return 0
+    scores = {
+        page: len(words & set(body.split())) / len(words)
+        for page, body in pages.items()
+    }
+    best = max(scores, key=scores.get)
+    ranked = sorted(scores.values(), reverse=True)
+    if ranked[0] >= MIN_PAGE_OVERLAP and (len(ranked) == 1 or ranked[0] > ranked[1]):
+        return best
+    return 0
+
+
+def _normalise(raw_claims: list[dict], stem: str, pages: dict[int, str]) -> list[dict]:
     """Assign stable refs and coerce the model's fields into the stored schema.
 
     The claim ref is generated here rather than asked of the model so that it is
@@ -41,11 +76,15 @@ def _normalise(raw_claims: list[dict], stem: str) -> list[dict]:
         Claim objects as emitted by the extractor sub-agent.
     stem : str
         Batch stem (e.g. `content_batch_2`), used to namespace the claim refs.
+    pages : dict[int, str]
+        The batch's pages, normalised, to place a claim the model gave no valid page
 
     Returns
     -------
     list[dict]
-        Claim records with `claim_ref`, `page`, `text` and `claim_type`.
+        Claim records with `claim_ref`, `page`, `text` and `claim_type`. `page` is 0
+        only when the model gave none of the batch's pages and the text is on no
+        single page.
     """
     claims: list[dict] = []
     for item in raw_claims:
@@ -53,15 +92,18 @@ def _normalise(raw_claims: list[dict], stem: str) -> list[dict]:
         if not text:
             continue
         page = item.get("page")
+        if not isinstance(page, int) or page not in pages:
+            page = _locate(text, pages)
         claim_type = str(item.get("claim_type") or "other").strip().lower()
         claims.append(
             {
                 "claim_ref": f"{stem}-c{len(claims) + 1}",
-                "page": page if isinstance(page, int) else 0,
+                "page": page,
                 "text": text,
                 "claim_type": claim_type
                 if claim_type in VALID_CLAIM_TYPES
                 else "other",
+
             }
         )
     return claims
@@ -80,24 +122,47 @@ def extract_claims(batch_md_s3_uri: str, session_id: str) -> str:
     batch_md_s3_uri : str
         S3 URI of a batch markdown file produced by `batch_content`.
     session_id : str
-        Orchestrator session id, used to namespace claim artefacts.
+        Review session id, used to namespace claim artefacts.
 
     Returns
     -------
     str
         JSON string of shape `{"extracted_claims_s3_uri": "s3://...",
-        "total_claims": N, "by_type": {...}}`. The claim texts are not returned —
-        pass `extracted_claims_s3_uri` on to `match_claims`.
+        "total_claims": N, "by_type": {...}}`. The claim texts stay on S3, at
+        `extracted_claims_s3_uri`, which `match_claims` reads.
     """
-    markdown = read_s3_text(batch_md_s3_uri)
+    markdown = read_text(batch_md_s3_uri)
     stem = batch_stem(batch_md_s3_uri)
 
-    text = run_inner_agent_text(
-        system_prompt=SYSTEM_PROMPT,
-        user_prompt=f"Extract every claim from this batch:\n\n{markdown}",
-        tools=[],
-    )
-    claims = _normalise(parse_tagged_json_array(text, "claims"), stem)
+    raw = None
+    # a long reply now and then comes back as broken JSON; asking again fixes it
+    for _ in range(EXTRACT_ATTEMPTS):
+        text = run_inner_agent_text(
+            system_prompt=SYSTEM_PROMPT,
+            user_prompt=f"Extract every claim from this batch:\n\n{markdown}",
+            tools=[],
+        )
+        raw = parse_tagged_json_array(text, "claims")
+        if raw is not None:
+            break
+    if raw is None:
+        note_issue(
+            session_id,
+            "extract",
+            "the extractor's reply had no parsable claims",
+            batch=stem,
+        )
+    claims = _normalise(raw or [], stem, _batch_pages(markdown))
+    unplaced = [c["claim_ref"] for c in claims if not c["page"]]
+    if unplaced:
+        note_issue(
+            session_id,
+            "extract",
+            f"{len(unplaced)} claims have no page",
+            severity="warning",
+            batch=stem,
+            claims=unplaced,
+        )
 
     s3_uri = write_claims_json(session_id, "extracted", stem, claims)
     by_type: dict[str, int] = {}

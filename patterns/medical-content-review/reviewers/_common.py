@@ -200,12 +200,13 @@ def run_inner_agent_text(
 INVALID_ESCAPE_RE = re.compile(r'\\(?!["\\/bfnrtu])')
 
 
-def _tagged_json_array(text: str, tag: str) -> list[dict] | None:
-    """The last JSON array of objects in `<tag>...</tag>`, or None when there is none
+def parse_tagged_json_array(text: str, tag: str) -> list[dict] | None:
+    """Pull one JSON array of objects out of `<tag>...</tag>` in a model response.
 
-    Falls back to parsing the whole response when the tag is absent. When the model
-    emits several tagged blocks ("Wait, correcting: ..."), the last one that parses is
-    its answer.
+    Falls back to parsing the whole response when the tag is absent, and returns None
+    when no payload is a JSON array, so a reply with no answer is told apart from an
+    empty answer. When the model emits several tagged blocks ("Wait, correcting:
+    ..."), the last one that parses is its answer.
     """
     blocks = re.findall(rf"<{tag}>(.*?)</{tag}>", text, re.DOTALL) or [text]
     for block in reversed(blocks):
@@ -225,13 +226,7 @@ def _tagged_json_array(text: str, tag: str) -> list[dict] | None:
     return None
 
 
-def parse_tagged_json_array(text: str, tag: str) -> list[dict]:
-    """Pull one JSON array of objects out of `<tag>...</tag>` in a model response.
 
-    Falls back to parsing the whole response when the tag is absent, and returns
-    an empty list when no payload is a JSON array of objects.
-    """
-    return _tagged_json_array(text, tag) or []
 
 
 def run_inner_agent(
@@ -241,11 +236,10 @@ def run_inner_agent(
 ) -> list[dict] | None:
     """Run a narrow sub-agent that answers with one JSON array in <findings> tags
 
-    Returns None when the reply holds no parsable array, so a reply with no answer is
-    told apart from an empty answer.
+    Returns None when the reply holds no parsable array.
     """
     text = run_inner_agent_text(system_prompt, user_prompt, tools)
-    return _tagged_json_array(text, "findings")
+    return parse_tagged_json_array(text, "findings")
 
 
 def reviewer_findings(

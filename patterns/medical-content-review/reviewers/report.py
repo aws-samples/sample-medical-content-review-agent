@@ -42,10 +42,13 @@ def check_kind(finding: dict) -> str:
     Returns
     -------
     str
-        `library` for the claims library's own findings, `editorial` for the generic
-        reviewer's, and `substantiation` for the internal and external reviewers'
+        `library_deviation`, `library_status` or `library_audience` for the claims
+        library's own findings, `editorial` for the generic reviewer's, and
+        `substantiation` for the internal and external reviewers'
     """
     if finding.get("reviewer") == "claims":
+        if finding.get("library_finding"):
+            return f"library_{finding['library_finding']}"
         return "library"
     if finding.get("reviewer") == "generic":
         return "editorial"

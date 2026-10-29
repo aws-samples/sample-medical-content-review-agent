@@ -18,7 +18,7 @@ export interface ReviewIssue {
   // pre-approved claims library ("" / undefined when it was not)
   claim_match?: string;
   claim_id?: string;
-  // Which kind of exact match it is: "verbatim", "reordered", or "" for the rest
+  // Which kind of exact match it is: "verbatim", "reordered", "segment", or ""
   claim_precision?: string;
 }
 
@@ -27,8 +27,9 @@ export type ClaimMatchStatus = "exact" | "partial" | "none";
 // The two views of a finished review: the claim-match table and the findings list
 type ResultsTab = "issues" | "claims";
 
-// An exact match is either the approved copy as written, or the same words rearranged
-export type MatchPrecision = "verbatim" | "reordered";
+// An exact match is the approved copy as written, the same words rearranged, or one
+// line of an approved claim that bundles several (a headline and its subline)
+export type MatchPrecision = "verbatim" | "reordered" | "segment";
 
 export interface ClaimMatch {
   claim_ref: string;
@@ -41,12 +42,19 @@ export interface ClaimMatch {
   matched_claim_text: string;
   library_status: string;
   library_claim_usable: boolean | null;
+  // False when the claim is approved for another audience than the asset's
+  audience_approved?: boolean | null;
+  library_audience?: string;
   deviation: string;
+  // Numbers the content changed from the approved wording ("'2 years' became '3 years'")
+  numeric_changes?: string[];
   unusable_reason: string;
   requires_verification: boolean;
 }
 
 export interface ClaimsReport {
+  // Who the batcher decided the asset is written for ("hcp" or "patient")
+  asset_audience?: { audience?: string; reason?: string };
   total_claims: number;
   counts: Record<ClaimMatchStatus, number>;
   requires_verification: number;
@@ -129,6 +137,12 @@ const CLAIM_MATCH_LABELS: Record<ClaimMatchStatus, string> = {
 const MATCH_PRECISION_LABELS: Record<MatchPrecision, string> = {
   verbatim: "verbatim",
   reordered: "reordered",
+  segment: "one line",
+};
+
+const AUDIENCE_LABELS: Record<string, string> = {
+  hcp: "HCP",
+  patient: "Patient / consumer",
 };
 
 const CLAIM_MATCH_BADGES: Record<ClaimMatchStatus, string> = {
@@ -164,6 +178,11 @@ const CLAIM_MATCH_DEFINITIONS: {
     text: "Exactly the same words as the approved claim, in a different order — approved copy that was re-laid-out. Also treated as approved, with the rearrangement recorded in the report.",
   },
   {
+    label: "Exact match · one line",
+    badge: CLAIM_MATCH_BADGES.exact,
+    text: "Word for word one line of an approved claim that bundles several lines, such as a headline and its subline. Any lines of that claim missing from the content are recorded in the report.",
+  },
+  {
     label: "Partial match",
     badge: CLAIM_MATCH_BADGES.partial,
     text: "Makes the same assertion as an approved claim, but the wording deviates, so the approval does not carry over. The deviation is recorded and the claim is verified like an unapproved one.",
@@ -194,12 +213,13 @@ function ClaimMatchLegend() {
           </div>
         ))}
         <p className="text-xs text-gray-500 pt-1 border-t border-gray-200 mt-2">
-          Both exact tags are decided in Python by comparing the words
+          The exact tags are decided in Python by comparing the words
           themselves, never by a model, because an exact match is the only tag
           that lets a claim skip verification. An exact match against a library
-          claim that is withdrawn, expired, superseded, or still in draft is
-          reported as an issue regardless. Nothing in this review is ever
-          written back to the claims library.
+          claim that is withdrawn, expired, superseded, still in draft, or
+          approved for another audience than the asset&apos;s is reported as an
+          issue regardless. Nothing in this review is ever written back to the
+          claims library.
         </p>
       </div>
     </details>
@@ -211,7 +231,7 @@ function isClaimMatchStatus(value: unknown): value is ClaimMatchStatus {
 }
 
 function isMatchPrecision(value: unknown): value is MatchPrecision {
-  return value === "verbatim" || value === "reordered";
+  return value === "verbatim" || value === "reordered" || value === "segment";
 }
 
 // Small pill showing a claim's match status, the kind of exact match it is, and the
@@ -411,6 +431,7 @@ export function ClaimsLibraryPreview({
 // Matching and issues are read one at a time, so they share the panel instead of
 // pushing the document preview further down the page.
 function ClaimsMatchingTab({ claimsReport }: { claimsReport: ClaimsReport }) {
+  const audience = claimsReport.asset_audience?.audience;
   const counts: {
     value: number;
     label: string;
@@ -457,6 +478,15 @@ function ClaimsMatchingTab({ claimsReport }: { claimsReport: ClaimsReport }) {
           </div>
         ))}
       </div>
+      {audience && AUDIENCE_LABELS[audience] && (
+        <p
+          className="text-xs text-gray-600 mb-3"
+          title={claimsReport.asset_audience?.reason}
+        >
+          <strong>Asset audience:</strong> {AUDIENCE_LABELS[audience]}. Partial
+          matches use only library claims approved for this audience.
+        </p>
+      )}
       <ClaimMatchLegend />
       <div className="space-y-2">
         {claimsReport.claims.map((claim) => (
@@ -481,8 +511,13 @@ function ClaimsMatchingTab({ claimsReport }: { claimsReport: ClaimsReport }) {
                 </span>
               )}
               {claim.library_claim_usable === false && (
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-red-100 text-red-800 border-red-300">
-                  {claim.library_status || "Not usable"}
+                <span
+                  className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-red-100 text-red-800 border-red-300"
+                  title={claim.unusable_reason}
+                >
+                  {claim.audience_approved === false
+                    ? `For ${claim.library_audience || "another audience"}`
+                    : claim.library_status || "Not usable"}
                 </span>
               )}
             </div>
@@ -492,6 +527,12 @@ function ClaimsMatchingTab({ claimsReport }: { claimsReport: ClaimsReport }) {
             {claim.deviation && (
               <p className="text-xs text-amber-800 mt-1">
                 <strong>Deviation:</strong> {claim.deviation}
+              </p>
+            )}
+            {claim.numeric_changes && claim.numeric_changes.length > 0 && (
+              <p className="text-xs text-red-700 mt-1">
+                <strong>Numbers changed:</strong>{" "}
+                {claim.numeric_changes.join("; ")}
               </p>
             )}
             {claim.matched_claim_text && (
