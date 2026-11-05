@@ -30,7 +30,7 @@ USER bedrock_agentcore
 EXPOSE 8080
 
 COPY patterns/medical-content-review/medical_review_agent.py .
-COPY patterns/medical-content-review/review_upload_hook.py .
+
 COPY patterns/medical-content-review/prompts/ prompts/
 COPY patterns/medical-content-review/reviewers/ reviewers/
 COPY patterns/medical-content-review/tools/ tools/

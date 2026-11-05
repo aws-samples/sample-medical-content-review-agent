@@ -78,7 +78,9 @@ def _ocr_single_page(pdf_path: str, page_idx: int, dpi: int) -> tuple[int, str]:
         system=[{"text": OCR_SYSTEM}],
         inferenceConfig={"maxTokens": 8192, **sampling_params(OCR_MODEL_ID, 0.0)},
     )
-    page_text = response["output"]["message"]["content"][0]["text"].strip()
+    # Models that think first return a reasoning block before the text
+    blocks = response["output"]["message"]["content"]
+    page_text = "\n".join(b["text"] for b in blocks if "text" in b).strip()
     return page_idx, page_text
 
 

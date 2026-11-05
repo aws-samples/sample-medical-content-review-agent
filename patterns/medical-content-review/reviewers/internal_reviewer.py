@@ -9,10 +9,10 @@ from reviewers._common import (
     FINDINGS_SCHEMA_HINT,
     batch_stem,
     build_claims_context,
-    claims_workflow_error,
     load_prompt,
     parse_s3_uri,
     read_s3_text,
+    reviewer_findings,
     run_inner_agent,
     write_review_json,
 )
@@ -31,7 +31,7 @@ def run_internal_review(
 ) -> str:
     """Run the internal-reference reviewer on one batch markdown and save to S3.
 
-    Internally spins up a narrow sub-agent with a single helper tool
+    Runs a narrow sub-agent with a single helper tool
     (`read_reference_markdown`) that lets it pull the text of any of the
     provided reference markdowns from S3 on demand.
 
@@ -40,7 +40,7 @@ def run_internal_review(
     batch_md_s3_uri : str
         S3 URI of a batch markdown file produced by `batch_content`.
     session_id : str
-        Orchestrator session id, used to namespace review outputs.
+        Review session id, used to namespace review outputs.
     reference_md_uris : list[str]
         S3 URIs of the reference markdown files (also produced by `process_pdf`).
         The reviewer is allowed to read any subset of these.
@@ -52,13 +52,8 @@ def run_internal_review(
     Returns
     -------
     str
-        S3 URI of the written findings JSON, or an error asking for the claims
-        workflow when the review has a claims library and none was passed.
+        S3 URI of the written findings JSON.
     """
-    skipped = claims_workflow_error(session_id, matched_claims_s3_uri, batch_md_s3_uri)
-    if skipped:
-        return skipped
-
     content_md = read_s3_text(batch_md_s3_uri)
     allow_set = set(reference_md_uris or [])
 
@@ -87,6 +82,6 @@ def run_internal_review(
         user_prompt=f"Review this batch against the references:\n\n{content_md}",
         tools=[read_reference_markdown] if reference_md_uris else [],
     )
-    return write_review_json(
-        session_id, "internal", batch_stem(batch_md_s3_uri), findings
-    )
+    stem = batch_stem(batch_md_s3_uri)
+    findings = reviewer_findings(findings, session_id, "internal_review", stem)
+    return write_review_json(session_id, "internal", stem, findings)

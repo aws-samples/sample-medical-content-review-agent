@@ -8,7 +8,7 @@ Medical Content Review is an AI-powered multi-agent system for reviewing medical
 
 - **Drag-and-drop upload**: Upload medical content PDFs, reference materials, and a pre-approved claims spreadsheet directly from the browser
 - **Pre-approved claims matching**: Claims are extracted from the content and matched against a human-curated claims library first, so each one is tagged `exact` (verbatim or reordered), `partial`, or `no match` before any further checking
-- **Multi-agent pipeline**: An orchestrator fans out an Editorial, Internal References, and External Evidence reviewer per content batch in a single parallel turn
+- **Code-driven review pipeline**: Each content batch runs extract → match → Editorial, Internal References, and External Evidence reviewers on its own, in parallel with the other batches, with every step retried once. An editor model then picks findings to merge and drop under hard rules enforced in code
 - **External data sources**: Cross-check claims against PubMed, OpenFDA, ClinicalTrials.gov, and Nova web search — each toggleable from the UI
 - **Live progress dashboard**: Elapsed timer, event-driven phase checklist, and per-tool activity log with expandable raw output while the review runs
 - **Preview tabs**: Switch between the uploaded content PDF, its reference PDFs, and the parsed claims library — before, during, and after the review
@@ -44,15 +44,16 @@ See the [deployment guide](docs/DEPLOYMENT.md) for detailed instructions.
 2. Log in with Cognito credentials
 3. Upload a medical content PDF (drag-and-drop or click to select)
 4. Optionally upload reference PDFs, a pre-approved claims spreadsheet (`.xlsx` / `.csv`) — parsed on upload, so its claims and the columns they were read from appear in the preview pane straight away — and toggle the external data sources (PubMed / OpenFDA / ClinicalTrials.gov / Nova)
-5. Click **Start AI Review** and watch as the orchestrator:
+5. Click **Start AI Review** and watch as the review pipeline:
    - OCRs every PDF to markdown in parallel (5 concurrent pages per PDF) and parses the claims spreadsheet
    - Splits the content markdown into logical review batches
    - Extracts the claims made in each batch, then matches them against the claims library and tags each one `exact`, `partial`, or `none`
-   - Fans out three reviewer sub-agents per batch in a single turn, each told which claims are already approved:
+   - Runs three reviewer sub-agents per batch as soon as that batch's claims are matched, each told which claims are already approved:
      - **Editorial** — spelling, grammar, exaggerated language, figure/image inconsistencies
      - **Internal References** — cross-checks claims against uploaded reference markdowns
      - **External Evidence** — cross-checks claims against enabled public databases (skipped when every external source is off)
-   - Aggregates every reviewer's findings and edits them into a de-duplicated, severity-scored final report
+   - Aggregates every reviewer's findings, merges a quote flagged on several pages into one finding, and asks an editor model which findings to merge and drop. Code applies those decisions under hard rules (claims-library and mandatory findings are never dropped, merged findings must be the same kind of check on the same page) and writes the final report
+   - Records every step, its timing, and any failure it survived in `reviews/{session_id}/run_record.json`, with a verdict on whether the review completed
 6. Review detected issues in the results panel; expand **Pre-Approved Claims Matching** to see every claim and its tag; click an issue to jump to its page; download the report as JSON
 
 ### Pre-approved claims
@@ -116,7 +117,7 @@ Findings from all reviewers are then tagged so no issue card is left without a m
 
 The library is read-only. Claims that pass verification are never approved or written back into it, and an `exact` match against a withdrawn or expired entry is still reported.
 
-None of this depends on the web UI. The claims tools are always registered on the orchestrator, so a caller invoking the runtime directly gets the same claim matching by passing `claimsUri` in the payload (see [Calling the agent with the API](#-calling-the-agent-with-the-api)).
+None of this depends on the web UI. The pipeline runs claim extraction and matching whenever the payload has a `claimsUri`, so a caller invoking the runtime directly gets the same claim matching (see [Calling the agent with the API](#-calling-the-agent-with-the-api)).
 
 Each session also writes `claims/{session_id}/claims_report.json` to the staging bucket — every extracted claim with its tag, the kind of exact match, the matched approved claim, and the deviation — and every finding in the downloadable report carries its `claim_match`, `claim_id`, and `claim_precision`.
 
@@ -135,12 +136,6 @@ response = client.invoke_agent_runtime(
     agentRuntimeArn=runtime_arn,
     payload=json.dumps(
         {
-            "prompt": (
-                "Please review the attached medical content document for adherence"
-                " issues. Extract the claims and match them against the pre-approved"
-                " claims library first, cross-check the remaining claims against the"
-                " references, and produce a detailed review report."
-            ),
             "runtimeSessionId": session_id,
             "enabledSources": ["pubmed", "openfda", "clinicaltrials"],
             "contentPdfUri": f"s3://{staging_bucket}/uploads/brochure.pdf",
@@ -158,7 +153,8 @@ response = client.invoke_agent_runtime(
 ```
 
 - `enabledSources` controls which public databases the external reviewer may call; omit it for the defaults, or pass `[]` to skip external evidence entirely
-- `contentPdfUri` and `referenceUris` point at objects the agent reads, and the `*Name` fields only affect how files are labelled in the report
+- `contentPdfUri` (required) and `referenceUris` point at objects the agent reads, and the `*Name` fields only affect how files are labelled in the report
+- There is no `prompt`: the review steps are fixed in code, so every request runs the same pipeline
 - `claimsUri` turns on claim extraction and matching, exactly as uploading the spreadsheet in the UI does; `claimsName` is optional but recommended, since the parser picks its reader from the file extension
 - All inputs must live under the `uploads/` prefix of the stack's staging bucket (`s3://{staging_bucket}/uploads/...`): the runtime role is granted read access to that prefix only
 - `runtimeSessionId` names the S3 folder the markdowns, claims report, and final report are written under, so reuse it when polling for results
@@ -233,12 +229,11 @@ medical-content-review/
 │   ├── .config_example.yaml # Example deployment configuration (tracked)
 │   └── config.yaml         # Your deployment configuration (gitignored)
 ├── patterns/               # Agent pattern implementations
-│   ├── medical-content-review/ # Orchestrator + reviewer sub-agents
-│   │   ├── medical_review_agent.py # Orchestrator entrypoint
-│   │   ├── review_upload_hook.py   # S3 upload for real-time display
-│   │   ├── prompts/                # System prompts for every agent (orchestrator, editorial, internal, external, claim extractor/matcher) and OCR/batcher helpers
-│   │   ├── reviewers/              # Editorial / Internal / External reviewers, claim extractor and matcher, and the get_reviews / get_claims aggregators
-│   │   ├── tools/                  # process_pdf (parallel OCR), batch_content, load_claims_library, and claims_parser (shared with the upload Lambda)
+│   ├── medical-content-review/ # Review pipeline + reviewer sub-agents
+│   │   ├── medical_review_agent.py # Runtime entrypoint
+│   │   ├── prompts/                # System prompts for every agent (editor, editorial, internal, external, claim extractor/matcher) and OCR/batcher helpers
+│   │   ├── reviewers/              # The pipeline, Editorial / Internal / External reviewers, claim extractor and matcher, the get_reviews / get_claims aggregators, and publish_review
+│   │   ├── tools/                  # process_pdf (parallel OCR), batch_content, load_claims_library, claims_parser (shared with the upload Lambda), and the run record
 │   │   ├── requirements.txt
 │   │   └── Dockerfile
 │   └── utils/              # Shared helpers (auth, SSM, gateway MCP client)

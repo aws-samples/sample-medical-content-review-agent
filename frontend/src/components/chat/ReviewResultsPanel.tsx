@@ -116,7 +116,7 @@ const DEFAULT_PHASES: Phase[] = [
   { icon: "✂️", text: "Splitting into batches", tools: ["batch_content"] },
   { icon: "🔍", text: "Running reviewers in parallel", tools: [] },
   { icon: "🧩", text: "Merging reviewer findings", tools: ["get_reviews"] },
-  { icon: "✅", text: "Writing final report", tools: ["file_write"] },
+  { icon: "✅", text: "Writing final report", tools: ["publish_review"] },
 ];
 
 const CLAIM_MATCH_LABELS: Record<ClaimMatchStatus, string> = {

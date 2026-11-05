@@ -34,7 +34,7 @@ function stripGatewayPrefix(name: string): string {
 }
 
 // The reviewer phase absorbs every tool we don't map explicitly (gateway searches
-// inside sub-agents, file_read, ...), so unknown tools never stall the checklist.
+// inside sub-agents, ...), so unknown tools never stall the checklist.
 const REVIEWERS_PHASE: Phase = {
   icon: "🔍",
   text: "Running reviewers in parallel",
@@ -73,7 +73,7 @@ function buildPhases(withClaims: boolean): Phase[] {
     ...(withClaims ? CLAIM_PHASES : []),
     REVIEWERS_PHASE,
     { icon: "🧩", text: "Merging reviewer findings", tools: ["get_reviews"] },
-    { icon: "✅", text: "Writing final report", tools: ["file_write"] },
+    { icon: "✅", text: "Writing final report", tools: ["publish_review"] },
   ];
 }
 
@@ -97,8 +97,7 @@ const TOOL_META: Record<string, { label: string; icon: string }> = {
   run_external_review: { label: "External Evidence", icon: "🔬" },
   run_internal_review: { label: "Internal References", icon: "📚" },
   get_reviews: { label: "Merging reviews", icon: "🧩" },
-  file_read: { label: "Reading file", icon: "📂" },
-  file_write: { label: "Writing a review report", icon: "✅" },
+  publish_review: { label: "Writing the review report", icon: "✅" },
   pubmed_search: { label: "Searching PubMed", icon: "🔬" },
   openfda_drug_search: { label: "Searching OpenFDA", icon: "💊" },
   clinicaltrials_search: { label: "Searching ClinicalTrials.gov", icon: "🏥" },
@@ -158,8 +157,6 @@ function extractDetailFromInput(
         "run_external_review",
         "run_internal_review",
         "read_reference_markdown",
-        "file_read",
-        "file_write",
       ].includes(core)
     ) {
       for (const key of pathKeys) {
@@ -239,36 +236,6 @@ async function fetchUrl(url: string): Promise<string | null> {
     console.warn("[ReviewFetch] Error fetching review URL:", err);
     return null;
   }
-}
-
-// Try to parse review issues from file_write tool input JSON
-function tryParseIssuesFromInput(input: string): ReviewIssue[] | null {
-  try {
-    const parsed = JSON.parse(input);
-    // The input might be { path: "...", content: "..." } or { file_path: "...", data: "..." }
-    const content = parsed.content || parsed.data;
-    if (typeof content === "string") {
-      const issues = JSON.parse(content);
-      if (
-        Array.isArray(issues) &&
-        issues.length > 0 &&
-        issues[0].page !== undefined
-      ) {
-        return issues;
-      }
-    }
-    // Or the input itself might be the array
-    if (
-      Array.isArray(parsed) &&
-      parsed.length > 0 &&
-      parsed[0].page !== undefined
-    ) {
-      return parsed;
-    }
-  } catch {
-    /* not valid JSON */
-  }
-  return null;
 }
 
 // Tool config from aws-exports.json (populated on mount)
@@ -643,7 +610,7 @@ export default function ChatInterface() {
                 });
                 return [...prev, next];
               });
-              if (event.name === "file_write") {
+              if (event.name === "publish_review") {
                 setShowReviewPanel(true);
               }
               updateMessage();
@@ -754,7 +721,7 @@ export default function ChatInterface() {
                   }
                 }
 
-                if (tc.name === "file_write") {
+                if (tc.name === "publish_review") {
                   const reviewUrl = extractReviewUrl(tc.result || "");
                   if (reviewUrl) {
                     lastReviewUrlRef.current = reviewUrl;
@@ -769,14 +736,6 @@ export default function ChatInterface() {
                         }
                       }
                     });
-                  }
-                  // Fallback: try to parse issues directly from the tool input
-                  if (!reviewUrl && tc.input) {
-                    const fallbackIssues = tryParseIssuesFromInput(tc.input);
-                    if (fallbackIssues) {
-                      setReviewIssues(fallbackIssues);
-                      setShowReviewPanel(true);
-                    }
                   }
                   if (tc.result) {
                     tc.result = tc.result.replace(URL_TAG_RE, "").trim();
