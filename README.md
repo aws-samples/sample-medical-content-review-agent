@@ -45,8 +45,8 @@ See the [deployment guide](docs/DEPLOYMENT.md) for detailed instructions.
 3. Upload a medical content PDF (drag-and-drop or click to select)
 4. Optionally upload reference PDFs, a pre-approved claims spreadsheet (`.xlsx` / `.csv`) — parsed on upload, so its claims and the columns they were read from appear in the preview pane straight away — and toggle the external data sources (PubMed / OpenFDA / ClinicalTrials.gov / Nova)
 5. Click **Start AI Review** and watch as the review pipeline:
-   - OCRs every PDF to markdown in parallel (5 concurrent pages per PDF) and parses the claims spreadsheet
-   - Splits the content markdown into logical review batches
+   - OCRs every PDF to markdown in parallel (5 concurrent pages per PDF) and parses the claims spreadsheet. Each page is grounded in the PDF's own text layer where it has one, so small print is copied exactly; very wide pages are rendered no larger than the model reads, and tall pages are cut into overlapping tiles. Transcribed pages are cached in S3 by PDF content and OCR settings, so a PDF reviewed again is not transcribed again. A page that cannot be transcribed falls back to its text layer, or is kept with a note, instead of failing the document
+   - Splits the content markdown into logical review batches; a page the batcher leaves out is reviewed as an extra batch, and a layout indicator page marked "not intended for content review" is not reviewed
    - Extracts the claims made in each batch, then matches them against the claims library and tags each one `exact`, `partial`, or `none`
    - Runs three reviewer sub-agents per batch as soon as that batch's claims are matched, each told which claims are already approved:
      - **Editorial** — spelling, grammar, exaggerated language, figure/image inconsistencies

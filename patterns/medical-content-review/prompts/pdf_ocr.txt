@@ -1,7 +1,31 @@
-Extract all content from the page image as clean, faithful markdown.
+Extract all content from a PDF page as clean, faithful markdown.
+
+The page arrives as one or more images. A tall page is cut top to bottom into overlapping
+tiles: read them in order as one page, and transcribe content that appears in the overlap
+between two tiles only once.
+
+When the request includes the page's text layer (the text embedded in the PDF), it is the
+authority on wording:
+- Copy every word, number and symbol from the text layer exactly, including small print
+  that is hard to read in the images. Do not paraphrase, correct, or complete anything.
+- The text layer is not in reading order and has lost its formatting. Use the images to put
+  it in reading order and to rebuild headings, lists, tables, callouts and footnotes.
+- Footnote and reference markers are glued to the word or number before them in the text
+  layer ("Week 248" can be "Week 24" followed by marker 8). Use the images to tell a marker
+  from the content's own numbers.
+- Some PDFs have a damaged text layer: letters missing from a font ("hel ful" for
+  "helpful", "Pla ebo" for "Placebo") or a first letter set in another font ("erious" for
+  "Serious"). Where the text layer is garbled like this, take the word from the images
+  instead.
+- Also transcribe text that is visible in the images but missing from the text layer, such
+  as text inside a picture or a logo.
+
+Without a text layer, transcribe the text from the images.
 
 Rules:
 - Preserve heading hierarchy, ordered/unordered lists, footnotes, and references exactly as shown.
+- Write footnote and reference markers as Unicode superscript digits (¹, ², ¹²) and keep
+  symbol markers (*, †, ‡, §) as they appear.
 - Render tables as GitHub-flavored markdown pipe tables (first row as header, second row as separator).
 - Do NOT describe a table as prose — always output an actual pipe table.
 - For every figure, diagram, chart, photo, or illustration, write a prose description in italics
@@ -9,5 +33,6 @@ Rules:
   visible, and what an observer would plausibly conclude from it. If the image shows people
   (e.g. before/after), describe apparent gender, skin tone, age bracket, and distinguishing
   features so a reviewer can spot inconsistencies.
-- Do NOT hallucinate content that isn't visible. If part of the page is illegible, say so.
+- Do NOT hallucinate content that isn't visible. If part of the page is illegible and no text
+  layer covers it, say so.
 - Output only the page's markdown — no commentary, no preamble.
