@@ -103,7 +103,6 @@ def _normalise(raw_claims: list[dict], stem: str, pages: dict[int, str]) -> list
                 "claim_type": claim_type
                 if claim_type in VALID_CLAIM_TYPES
                 else "other",
-
             }
         )
     return claims

@@ -126,6 +126,7 @@ NO_CLAIMS_CONTEXT = (
     " in the batch as unverified)"
 )
 
+
 def build_claims_context(matched_claims_s3_uri: str | None) -> str:
     """Summarise a batch's claim-match results for a downstream reviewer's prompt.
 
@@ -230,9 +231,6 @@ def parse_tagged_json_array(text: str, tag: str) -> list[dict] | None:
         if isinstance(data, list):
             return [x for x in data if isinstance(x, dict)]
     return None
-
-
-
 
 
 def run_inner_agent(

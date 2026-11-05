@@ -184,7 +184,6 @@ def _change_headline(text: str, approved: str, claim_id: str) -> str:
     return f"Wording differs from {claim_id}"
 
 
-
 def _render_library(library: list[dict]) -> str:
     """Render the library as a compact, id-anchored block for the system prompt."""
     lines: list[str] = []
