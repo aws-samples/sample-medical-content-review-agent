@@ -26,8 +26,7 @@ import {
 // pdf.js is large, so the viewer loads only once a PDF is shown
 const PdfQuoteViewer = lazy(() => import("./PdfQuoteViewer"));
 
-// Every PDF in the app is shown in this viewer, with zoom and the hand tool; a target
-// highlights a quote on a page and zooms to it
+// all PDFs use this viewer (zoom, hand tool); a target highlights and zooms to a quote
 export function PdfPane({
   url,
   target = null,
@@ -45,7 +44,7 @@ export function PdfPane({
 export interface ReviewIssue {
   page: number;
   quote: string;
-  // The problem in a few words, and the words of the quote that are the problem
+  // the problem in a few words, and the words of the quote that are the problem
   headline?: string;
   issue_spans?: string[];
   issue: string;
@@ -58,13 +57,13 @@ export interface ReviewIssue {
   // pre-approved claims library ("" / undefined when it was not)
   claim_match?: string;
   claim_id?: string;
-  // Which kind of exact match it is: "verbatim", "reordered", "segment", or ""
+  // which kind of exact match it is: "verbatim", "reordered", "segment", or ""
   claim_precision?: string;
-  // Every page the same quote is flagged on by the same check; page is the first
+  // every page the same quote is flagged on by the same check; page is the first
   pages?: number[];
-  // The kind of check that raised the finding (library_deviation, editorial, ...)
+  // the kind of check that raised the finding (library_deviation, editorial, ...)
   check?: string;
-  // Shared by every finding on the same quote, for showing them on one card
+  // shared by every finding on the same quote, for showing them on one card
   quote_group?: string;
 }
 
@@ -81,8 +80,7 @@ type ResultsTab = "issues" | "claims";
 type IssueView = "open" | "addressed";
 type IssueSort = "severity" | "page";
 
-// An exact match is the approved copy as written, the same words rearranged, or one
-// line of an approved claim that bundles several (a headline and its subline)
+// exact match: the approved copy as written, reordered, or one line of a bundled claim
 export type MatchPrecision = "verbatim" | "reordered" | "segment";
 
 export interface ClaimMatch {
@@ -96,18 +94,18 @@ export interface ClaimMatch {
   matched_claim_text: string;
   library_status: string;
   library_claim_usable: boolean | null;
-  // False when the claim is approved for another audience than the asset's
+  // false when the claim is approved for another audience than the asset's
   audience_approved?: boolean | null;
   library_audience?: string;
   deviation: string;
-  // Numbers the content changed from the approved wording ("'2 years' became '3 years'")
+  // numbers the content changed from the approved wording ("'2 years' became '3 years'")
   numeric_changes?: string[];
   unusable_reason: string;
   requires_verification: boolean;
 }
 
 export interface ClaimsReport {
-  // Who the batcher decided the asset is written for ("hcp" or "patient")
+  // who the batcher decided the asset is written for ("hcp" or "patient")
   asset_audience?: { audience?: string; reason?: string };
   total_claims: number;
   counts: Record<ClaimMatchStatus, number>;
@@ -160,9 +158,9 @@ export interface PreviewDoc {
 interface ReviewResultsPanelProps {
   issues: ReviewIssue[];
   claimsReport?: ClaimsReport | null;
-  // Pre-signed URL of the readiness report workbook, once the review is published
+  // pre-signed URL of the readiness report workbook, once the review is published
   reportXlsxUrl?: string | null;
-  // The reviewed document's filename, to name the downloads after it
+  // the reviewed document's filename, to name the downloads after it
   documentName?: string;
   isLoading: boolean;
   activityLog?: ActivityEntry[];
@@ -488,7 +486,7 @@ export function ClaimsLibraryPreview({
 // The claim-match results, rendered as one of the two tabs of the right-hand panel.
 // Matching and issues are read one at a time, so they share the panel instead of
 // pushing the document preview further down the page.
-// The kind of check behind a finding, as `check` carries it, with its section colour
+// the kind of check behind a finding, as `check` carries it, with its section color
 const CHECK_LABELS: Record<string, string> = {
   library_deviation: "Library deviation",
   library_status: "Library status",
@@ -498,7 +496,7 @@ const CHECK_LABELS: Record<string, string> = {
   substantiation: "Substantiation",
 };
 
-const CHECK_COLOURS: Record<string, string> = {
+const CHECK_COLORS: Record<string, string> = {
   library_deviation: "border-l-amber-500 bg-amber-50",
   library_status: "border-l-red-500 bg-red-50",
   library_audience: "border-l-rose-500 bg-rose-50",
@@ -566,7 +564,7 @@ function claimSearchText(c: ClaimMatch): string {
   );
 }
 
-// Mandatory findings are what to fix; optional notes are one chip away
+// mandatory findings are what to fix; optional notes are one chip away
 const DEFAULT_ISSUE_FILTERS: FilterState = {
   selected: { type: ["mandatory"] },
   search: "",
@@ -625,7 +623,7 @@ function ClaimsMatchingTab({
   claimsReport: ClaimsReport;
   filters: FilterState;
   onFiltersChange: (state: FilterState) => void;
-  // Shows the claim highlighted in the content document
+  // shows the claim highlighted in the content document
   onSelectClaim: (claim: ClaimMatch) => void;
   selectedRef: string | null;
 }) {
@@ -675,7 +673,7 @@ function ClaimsMatchingTab({
   const selectedMatch = filters.selected.match ?? [];
   return (
     <div>
-      {/* Each count is a shortcut to the claims with that tag */}
+      {/* each count is a shortcut to the claims with that tag */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
         {counts.map((count) => {
           const isSelected =
@@ -914,7 +912,7 @@ function maxScore(items: ReviewIssue[]): number {
   return Math.max(0, ...items.map((i) => i.score));
 }
 
-// Every finding's words at issue on a card, without repeats
+// every finding's words at issue on a card, without repeats
 export function cardSpans(items: ReviewIssue[]): string[] {
   const out: string[] = [];
   for (const i of items)
@@ -924,7 +922,7 @@ export function cardSpans(items: ReviewIssue[]): string[] {
   return out;
 }
 
-// The quote with the words at issue in bold, matched case-insensitively
+// the quote with the words at issue in bold, matched case-insensitively
 export function HighlightedQuote({
   quote,
   spans,
@@ -958,8 +956,7 @@ export function HighlightedQuote({
   return <>{parts}</>;
 }
 
-// One finding inside a quote card: its kind of check and headline, the fix, and the
-// full issue, reference and source behind a details toggle
+// a finding in a quote card: check, headline, fix; issue/reference/source under details
 function FindingSection({ issue }: { issue: ReviewIssue }) {
   const headline = issue.headline?.trim();
   const details = (
@@ -982,7 +979,7 @@ function FindingSection({ issue }: { issue: ReviewIssue }) {
   return (
     <div
       className={`border-l-4 rounded px-3 py-2.5 ${
-        CHECK_COLOURS[issue.check ?? ""] ?? "border-l-gray-400 bg-gray-50"
+        CHECK_COLORS[issue.check ?? ""] ?? "border-l-gray-400 bg-gray-50"
       }`}
     >
       <div className="flex items-center gap-1.5 flex-wrap mb-1.5">
@@ -1058,19 +1055,19 @@ export function ReviewResultsPanel({
   previewDocs,
   onNewReview,
 }: ReviewResultsPanelProps) {
-  // The quote to show highlighted in the content document
+  // the quote to show highlighted in the content document
   const [quoteTarget, setQuoteTarget] = useState<QuoteTarget | null>(null);
-  // The finding card or claim row last clicked, shown highlighted in the document
+  // the finding card or claim row last clicked, shown highlighted in the document
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [issueFilters, setIssueFilters] = useState<FilterState>(
     DEFAULT_ISSUE_FILTERS,
   );
   const [claimFilters, setClaimFilters] = useState<FilterState>(EMPTY_FILTERS);
-  // Quote groups the user has marked as addressed, for this review only
+  // quote groups the user has marked as addressed, for this review only
   const [addressed, setAddressed] = useState<Set<string>>(() => new Set());
   const [issueView, setIssueView] = useState<IssueView>("open");
   const [issueSort, setIssueSort] = useState<IssueSort>("severity");
-  // Filters belong to one review: reset them when a new one's results arrive
+  // filters belong to one review: reset them when a new one's results arrive
   const [filtersFor, setFiltersFor] = useState({ issues, claimsReport });
   if (
     filtersFor.issues !== issues ||
@@ -1118,7 +1115,7 @@ export function ReviewResultsPanel({
     ? resultsTab ?? (issues.length === 0 ? "claims" : "issues")
     : "issues";
 
-  // Every finding keyed by its card, so a card keeps its key when others are filtered out
+  // every finding keyed by its card, so a card keeps its key when others are filtered out
   const keyedIssues = useMemo(
     () =>
       issues.map((i, idx) =>
@@ -1138,7 +1135,7 @@ export function ReviewResultsPanel({
     [issueView, openIssues, keyedIssues, addressed],
   );
 
-  // The counts are over the open mandatory findings, the ones left to fix
+  // the counts are over the open mandatory findings, the ones left to fix
   const stats = useMemo(() => {
     const toFix = openIssues.filter((i) => i.type === "mandatory");
     return {
@@ -1159,7 +1156,7 @@ export function ReviewResultsPanel({
     return issueSort === "severity" ? sortCardsBySeverity(cards) : cards;
   }, [shownIssues, issueSort]);
 
-  // Findings on each quote, filtered or not, so a card can say how many it hides
+  // findings on each quote, filtered or not, so a card can say how many it hides
   const groupSizes = useMemo(() => {
     const sizes = new Map<string, number>();
     for (const i of keyedIssues)
@@ -1183,7 +1180,7 @@ export function ReviewResultsPanel({
     setResultsTab("issues");
   };
 
-  // Switch to the content document and highlight a quote on its page
+  // switch to the content document and highlight a quote on its page
   const showQuote = (page: number, quote: string, spans?: string[]) => {
     setQuoteTarget({ page, quote, spans, nonce: Date.now() });
     const contentIdx = previewTabs.findIndex((t) => t.kind === "content");
@@ -1214,7 +1211,7 @@ export function ReviewResultsPanel({
     );
 
   const [xlsxError, setXlsxError] = useState<string | null>(null);
-  // Fetched rather than linked, so the file can be named after the reviewed document
+  // fetched rather than linked, so the file can be named after the reviewed document
   const handleXlsxDownload = async () => {
     if (!reportXlsxUrl) return;
     setXlsxError(null);
@@ -1685,7 +1682,7 @@ export function ReviewResultsPanel({
           )}
         </div>
 
-        {/* Stats Bar: each count is a shortcut to that severity */}
+        {/* stats bar: each count is a shortcut to that severity */}
         <div className="grid grid-cols-4 gap-4 mb-6">
           {(
             [

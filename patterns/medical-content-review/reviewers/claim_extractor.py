@@ -32,18 +32,43 @@ VALID_CLAIM_TYPES = {
 }
 
 EXTRACT_ATTEMPTS = 2
-# Share of a claim's words a page must hold to be taken as the page it came from
+# share of a claim's words a page must hold to be taken as the page it came from
 MIN_PAGE_OVERLAP = 0.8
 
 
 def _batch_pages(markdown: str) -> dict[int, str]:
+    """Split a batch's markdown into its pages, normalized for matching claim text
+
+    Parameters
+    ----------
+    markdown : str
+        The batch markdown, with the content batcher's page markers
+
+    Returns
+    -------
+    dict[int, str]
+        The normalized text of each page, keyed by page number
+    """
     return {
         int(m.group(1)): normalise(m.group(2)) for m in PAGE_PATTERN.finditer(markdown)
     }
 
 
 def _locate(text: str, pages: dict[int, str]) -> int:
-    """The batch page a claim's text comes from, or 0 when no page clearly holds it"""
+    """The batch page a claim's text comes from, or 0 when no page clearly holds it
+
+    Parameters
+    ----------
+    text : str
+        The claim text as the model extracted it
+    pages : dict[int, str]
+        The batch's normalized pages, keyed by page number
+
+    Returns
+    -------
+    int
+        The page number holding the claim, or 0 when no single page clearly does
+    """
     if len(pages) == 1:
         return next(iter(pages))
     claim = normalise(text)
@@ -77,7 +102,7 @@ def _normalise(raw_claims: list[dict], stem: str, pages: dict[int, str]) -> list
     stem : str
         Batch stem (e.g. `content_batch_2`), used to namespace the claim refs.
     pages : dict[int, str]
-        The batch's pages, normalised, to place a claim the model gave no valid page
+        The batch's pages, normalized, to place a claim the model gave no valid page
 
     Returns
     -------
@@ -121,7 +146,7 @@ def extract_claims(batch_md_s3_uri: str, session_id: str) -> str:
     batch_md_s3_uri : str
         S3 URI of a batch markdown file produced by `batch_content`.
     session_id : str
-        Review session id, used to namespace claim artefacts.
+        Review session id, used to namespace claim artifacts.
 
     Returns
     -------

@@ -30,9 +30,9 @@ AGGREGATE_NAME = "all_findings.json"
 WORKBOOK_NAME = "readiness_report.xlsx"
 XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 MANDATORY_SCORE = 70
-# A finding raised by two reviewers is mandatory from this score
+# a finding raised by two reviewers is mandatory from this score
 CORROBORATED_SCORE = 40
-# Internal-only fields that never reach the published report
+# internal-only fields that never reach the published report
 PRIVATE_FIELDS = ("id", "reviewer")
 
 
@@ -61,16 +61,52 @@ def check_kind(finding: dict) -> str:
 
 
 def _score(finding: dict) -> int:
+    """A finding's score, or 0 when it has no integer score
+
+    Parameters
+    ----------
+    finding : dict
+        An aggregated finding
+
+    Returns
+    -------
+    int
+        The finding's `score`, 0 when missing or not an integer
+    """
     score = finding.get("score")
     return score if isinstance(score, int) else 0
 
 
 def _pages(finding: dict) -> list[int]:
+    """The pages a finding occurs on
+
+    Parameters
+    ----------
+    finding : dict
+        An aggregated finding, with `pages` or a single `page`
+
+    Returns
+    -------
+    list[int]
+        The finding's integer page numbers, empty when it has none
+    """
     pages = finding.get("pages") or [finding.get("page")]
     return [p for p in pages if isinstance(p, int)]
 
 
 def _join(values: list[object]) -> str:
+    """Join `" | "`-separated values into one, keeping each part once in order
+
+    Parameters
+    ----------
+    values : list[object]
+        The values to join, each possibly holding several `" | "`-separated parts
+
+    Returns
+    -------
+    str
+        The distinct non-empty parts, joined with `" | "`
+    """
     parts: list[str] = []
     for value in values:
         for part in str(value or "").split(" | "):
@@ -80,7 +116,21 @@ def _join(values: list[object]) -> str:
 
 
 def _combine(group: list[dict], join_sources: bool = False) -> dict:
-    """One finding standing for a group: the most severe member, on every page"""
+    """One finding standing for a group: the most severe member, on every page
+
+    Parameters
+    ----------
+    group : list[dict]
+        The findings to combine
+    join_sources : bool
+        Whether to join the members' references and sources, and make the finding
+        mandatory when several reviewers raised it with a high enough score
+
+    Returns
+    -------
+    dict
+        The combined finding, listing every member's page in `pages`
+    """
     base = max(group, key=lambda f: (f.get("type") == "mandatory", _score(f)))
     merged = {**base}
     pages = sorted({p for f in group for p in _pages(f)})
@@ -133,7 +183,23 @@ def merge_repeats(findings: list[dict]) -> list[dict]:
 def _apply_decisions(
     findings: list[dict], drop: list[str], merge: list[list[str]]
 ) -> tuple[list[dict], dict]:
-    """Apply the editor's drop and merge decisions, within the report's hard rules"""
+    """Apply the editor's drop and merge decisions, within the report's hard rules
+
+    Parameters
+    ----------
+    findings : list[dict]
+        The aggregated findings, each with its `id`
+    drop : list[str]
+        Ids of the findings the editor drops
+    merge : list[list[str]]
+        Groups of ids the editor merges into one finding each
+
+    Returns
+    -------
+    tuple[list[dict], dict]
+        The findings to publish, and a summary of how many were dropped and merged
+        with every decision that was ignored and why
+    """
     by_id = {f["id"]: f for f in findings if f.get("id")}
     ignored: list[dict] = []
     replaced: dict[str, dict] = {}
@@ -192,6 +258,20 @@ def _apply_decisions(
 
 
 def _published_form(finding: dict, quote_group: str) -> dict:
+    """A finding as published: without its private fields, with its check and group
+
+    Parameters
+    ----------
+    finding : dict
+        A finding to publish
+    quote_group : str
+        The id of the first finding on the same quote
+
+    Returns
+    -------
+    dict
+        The published finding, with `check` and `quote_group` added
+    """
     out = {k: v for k, v in finding.items() if k not in PRIVATE_FIELDS}
     out["check"] = check_kind(finding)
     out["quote_group"] = quote_group
@@ -209,7 +289,7 @@ def quote_groups(findings: list[dict]) -> list[str]:
     Returns
     -------
     list[str]
-        For each finding, the id of the first finding on the same normalised quote; a
+        For each finding, the id of the first finding on the same normalized quote; a
         finding without a quote is a group of its own
     """
     first: dict[str, str] = {}
@@ -222,7 +302,22 @@ def quote_groups(findings: list[dict]) -> list[str]:
 
 
 def _publish_workbook(session_id: str, prefix: str, report: list[dict]) -> str:
-    """Write the readiness report XLSX next to the review report; return its URL tag"""
+    """Write the readiness report XLSX next to the review report; return its URL tag
+
+    Parameters
+    ----------
+    session_id : str
+        The review session, whose claims report goes into the workbook
+    prefix : str
+        The S3 key prefix of the session's review files
+    report : list[dict]
+        The published findings
+
+    Returns
+    -------
+    str
+        A `[REPORT_XLSX_URL:...]` tag holding a pre-signed download URL
+    """
     claims_report = read_json(claims_report_key(session_id))
     key = prefix + WORKBOOK_NAME
     put_bytes(key, build_workbook(claims_report, report, session_id), XLSX_TYPE)
@@ -270,7 +365,7 @@ def publish_review(
     prefix = f"{REVIEWS_PREFIX}/{safe_session_id(session_id)}/"
     aggregate = read_json(prefix + AGGREGATE_NAME)
     if not isinstance(aggregate, dict):
-        raise RuntimeError(f"No aggregated findings at {prefix}{AGGREGATE_NAME}")
+        raise TypeError(f"No aggregated findings at {prefix}{AGGREGATE_NAME}")
     findings = [f for f in aggregate.get("findings", []) if isinstance(f, dict)]
 
     published, decisions = _apply_decisions(findings, drop or [], merge or [])

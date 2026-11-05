@@ -86,8 +86,7 @@ describe("Build Output Tests", () => {
         if (jsFiles.length > 0) {
           const sampleFile = join(assetsPath, jsFiles[0]);
           const content = readFileSync(sampleFile, "utf-8");
-          // Minified files have very long lines; bundled libraries keep their license
-          // comments on lines of their own, so the line count alone says little
+          // license comments keep lines of their own, so line count alone says little
           const lineCount = content.split("\n").length;
           expect(content.length / lineCount).toBeGreaterThan(200);
         }

@@ -11,8 +11,7 @@ from utils.auth import extract_user_id_from_context
 
 app = BedrockAgentCoreApp()
 
-# External data sources reachable via the AgentCore Gateway. Only the external-review
-# sub-agent calls them; this dict validates user-supplied keys.
+# data sources behind the AgentCore Gateway, called only by the external reviewer
 ALL_DATA_SOURCES = {
     "pubmed": "PubMed Search",
     "openfda": "OpenFDA Drug Search",
@@ -31,7 +30,7 @@ def _load_tools_config() -> dict:
 
 TOOLS_CONFIG = _load_tools_config()
 
-# Sources deployed behind the Gateway; a disabled one has no Gateway target to call
+# sources deployed behind the Gateway; a disabled one has no Gateway target to call
 DEPLOYED_DATA_SOURCES = [
     key for key in ALL_DATA_SOURCES if TOOLS_CONFIG.get(key, {}).get("enabled", True)
 ]

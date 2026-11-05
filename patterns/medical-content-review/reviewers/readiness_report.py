@@ -8,7 +8,7 @@ with a summary sheet, a claims sheet and a findings sheet.
 
 import io
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from openpyxl import Workbook
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
@@ -17,7 +17,7 @@ from openpyxl.utils import get_column_letter
 
 from reviewers.claim_tags import best_claim, normalise
 
-# Excel's limit on the characters in one cell
+# the limit Excel puts on the characters in one cell
 MAX_CELL_CHARS = 32767
 
 CHECK_LABELS = {
@@ -47,7 +47,7 @@ OUTCOME_FILLS = {
 HEADER_FILL = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
 WRAP = Alignment(wrap_text=True, vertical="top", horizontal="left")
 
-# (header, width) per column
+# the (header, width) of each column
 CLAIM_COLUMNS = (
     ("Page", 7),
     ("Claim", 50),
@@ -101,8 +101,7 @@ def claim_outcome(claim: dict) -> tuple[str, str]:
     reason = claim.get("unusable_reason") or ""
 
     if status in ("exact", "partial") and claim_id and not usable:
-        # The matcher reports a claim's own status before its audience, so a claim that
-        # is both expired and for another audience carries the status as its reason
+        # an expired claim for another audience carries its status as the reason
         if claim.get("audience_approved") is False and not reason.startswith(
             "the approved claim"
         ):
@@ -152,6 +151,18 @@ def link_findings(claims: list[dict], findings: list[dict]) -> list[list[dict]]:
 
 
 def _findings_summary(findings: list[dict]) -> str:
+    """Summarize a claim's findings for its row of the claims sheet
+
+    Parameters
+    ----------
+    findings : list[dict]
+        The published findings about one claim
+
+    Returns
+    -------
+    str
+        The mandatory and optional counts and the kinds of check, or "" for none
+    """
     if not findings:
         return ""
     mandatory = sum(1 for f in findings if f.get("type") == "mandatory")
@@ -160,7 +171,20 @@ def _findings_summary(findings: list[dict]) -> str:
 
 
 def claim_rows(claims: list[dict], findings: list[dict]) -> list[list[object]]:
-    """One row per claim, in the order of `CLAIM_COLUMNS`"""
+    """One row per claim, in the order of `CLAIM_COLUMNS`
+
+    Parameters
+    ----------
+    claims : list[dict]
+        Claim records from the claims report
+    findings : list[dict]
+        Published findings
+
+    Returns
+    -------
+    list[list[object]]
+        The claims sheet rows, without the header
+    """
     rows = []
     for claim, about in zip(claims, link_findings(claims, findings)):
         outcome, recommendation = claim_outcome(claim)
@@ -191,7 +215,18 @@ def claim_rows(claims: list[dict], findings: list[dict]) -> list[list[object]]:
 
 
 def finding_rows(findings: list[dict]) -> list[list[object]]:
-    """One row per published finding, in the order of `FINDING_COLUMNS`"""
+    """One row per published finding, in the order of `FINDING_COLUMNS`
+
+    Parameters
+    ----------
+    findings : list[dict]
+        Published findings, each with its `check`
+
+    Returns
+    -------
+    list[list[object]]
+        The findings sheet rows, without the header
+    """
     rows = []
     for f in findings:
         pages = f.get("pages") or [f.get("page")]
@@ -215,12 +250,35 @@ def finding_rows(findings: list[dict]) -> list[list[object]]:
 
 
 def _cell_value(value: object) -> object:
+    """A value made safe for a cell: no illegal characters, within Excel's cell limit
+
+    Parameters
+    ----------
+    value : object
+        The value to write
+
+    Returns
+    -------
+    object
+        The value, with a string stripped of illegal characters and cut to length
+    """
     if not isinstance(value, str):
         return value
     return ILLEGAL_CHARACTERS_RE.sub("", value)[:MAX_CELL_CHARS]
 
 
 def _write_table(ws, columns: tuple, rows: list[list[object]]) -> None:
+    """Write a header and rows to a sheet, styled, filtered and frozen
+
+    Parameters
+    ----------
+    ws : Worksheet
+        The sheet to write to
+    columns : tuple
+        The (header, width) of each column
+    rows : list[list[object]]
+        The rows, in the order of `columns`
+    """
     ws.append([header for header, _ in columns])
     for cell in ws[1]:
         cell.font = Font(bold=True)
@@ -231,7 +289,7 @@ def _write_table(ws, columns: tuple, rows: list[list[object]]) -> None:
     for row in ws.iter_rows(min_row=2):
         for cell in row:
             cell.alignment = WRAP
-            # Content copied from the asset is text, never a formula
+            # content copied from the asset is text, never a formula
             if isinstance(cell.value, str) and cell.value.startswith("="):
                 cell.data_type = "s"
     for i, (_, width) in enumerate(columns, start=1):
@@ -243,6 +301,24 @@ def _write_table(ws, columns: tuple, rows: list[list[object]]) -> None:
 def _summary_rows(
     claims_report: dict, findings: list[dict], outcomes: list[str], session_id: str
 ) -> list[tuple[str, object]]:
+    """The label and value rows of the summary sheet
+
+    Parameters
+    ----------
+    claims_report : dict
+        The session's claims report, {} when there is none
+    findings : list[dict]
+        Published findings, each with its `check`
+    outcomes : list[str]
+        The outcome of each claim
+    session_id : str
+        Session the review ran under
+
+    Returns
+    -------
+    list[tuple[str, object]]
+        The summary sheet's (label, value) rows
+    """
     audience = claims_report.get("asset_audience") or {}
     counts = claims_report.get("counts") or {}
     by_outcome = Counter(outcomes)
@@ -251,13 +327,15 @@ def _summary_rows(
     return [
         ("Readiness report", ""),
         (
-            "Advisory pre-MLR check. It flags what a reviewer should look at; it never"
-            " approves, rejects or edits content.",
+            (
+                "Advisory pre-MLR check. It flags what a reviewer should look at; it"
+                " never approves, rejects or edits content."
+            ),
             "",
         ),
         ("", ""),
         ("Session", session_id),
-        ("Generated (UTC)", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")),
+        ("Generated (UTC)", datetime.now(UTC).strftime("%Y-%m-%d %H:%M")),
         ("Asset audience", audience.get("audience") or "not decided"),
         ("Why", audience.get("reason") or ""),
         ("", ""),
@@ -319,10 +397,10 @@ def build_workbook(
     _write_table(ws, CLAIM_COLUMNS, rows)
     outcome_col = [h for h, _ in CLAIM_COLUMNS].index("Outcome") + 1
     for row in ws.iter_rows(min_row=2, min_col=outcome_col, max_col=outcome_col):
-        colour = OUTCOME_FILLS.get(row[0].value)
-        if colour:
+        color = OUTCOME_FILLS.get(row[0].value)
+        if color:
             row[0].fill = PatternFill(
-                start_color=colour, end_color=colour, fill_type="solid"
+                start_color=color, end_color=color, fill_type="solid"
             )
 
     _write_table(wb.create_sheet("Findings"), FINDING_COLUMNS, finding_rows(findings))

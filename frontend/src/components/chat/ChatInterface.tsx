@@ -217,7 +217,7 @@ function extractClaimsLibUrl(result: string): string | null {
   return match ? match[1] : null;
 }
 
-// Extract the readiness report XLSX URL that `publish_review` appends after the review URL
+// extract the readiness report XLSX URL `publish_review` appends after the review URL
 function extractReportXlsxUrl(result: string): string | null {
   const match = result.match(/\[REPORT_XLSX_URL:(https?:\/\/[^\]]+)\]/);
   return match ? match[1] : null;

@@ -1,9 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-// Finds a finding's quote in a PDF page's text layer. Quotes are model transcriptions,
-// so the match is word by word and tolerant: footnote markers, ligatures, case and
-// punctuation are ignored, and a few words may differ.
+// tolerant word-by-word quote match in a text layer (footnotes, ligatures, case ignored)
 
 export interface TextItemLike {
   str?: string;
@@ -13,8 +11,7 @@ export interface TextItemLike {
   height?: number;
 }
 
-// A span of one text item to highlight, as character offsets into its `str`, with the
-// parts of it that are the words at issue
+// a span of one text item to highlight (offsets into its `str`), with its words at issue
 export interface HitRange {
   item: number;
   start: number;
@@ -29,14 +26,14 @@ interface Word {
   norm: string;
 }
 
-// Share of the quote's words that must be found, in order, for a match
+// share of the quote's words that must be found, in order, for a match
 const MIN_MATCHED = 0.6;
-// How much longer than the quote the matched span may be, in words
+// how much longer than the quote the matched span may be, in words
 const SPAN_SLACK = 1.5;
 
 const MARKERS_RE = /[¹²³⁰-₟†‡§¶‖*®™©]/g;
 
-export function normaliseWord(word: string): string {
+export function normalizeWord(word: string): string {
   return word
     .replace(MARKERS_RE, "")
     .normalize("NFKC")
@@ -48,7 +45,7 @@ export function normaliseWord(word: string): string {
 
 function sameWord(a: string, b: string): boolean {
   if (a === b) return true;
-  // "hba1c" against "hba1c1": a footnote number that the text layer runs into the word
+  // e.g. "hba1c" vs "hba1c1": a footnote number the text layer runs into the word
   return (
     Math.min(a.length, b.length) >= 3 && (a.startsWith(b) || b.startsWith(a))
   );
@@ -59,7 +56,7 @@ function pageWords(items: TextItemLike[]): Word[] {
   items.forEach((item, idx) => {
     const str = item.str ?? "";
     for (const m of str.matchAll(/\S+/g)) {
-      const norm = normaliseWord(m[0]);
+      const norm = normalizeWord(m[0]);
       if (norm)
         words.push({
           item: idx,
@@ -75,11 +72,11 @@ function pageWords(items: TextItemLike[]): Word[] {
 export function quoteWords(quote: string): string[] {
   return quote
     .split(/\s+/)
-    .map(normaliseWord)
+    .map(normalizeWord)
     .filter((w) => w);
 }
 
-// Marks each span's first occurrence among the matched words as strong
+// marks each span's first occurrence among the matched words as strong
 function markSpans(
   words: Word[],
   first: number,
@@ -106,8 +103,7 @@ function markSpans(
   }
 }
 
-// The text-layer ranges covering the quote on this page, or null when it is not found.
-// `spans` are the words at issue within the quote, marked `strong` in their ranges
+// text-layer ranges covering the quote here, or null; words at issue marked `strong`
 export function locateQuote(
   items: TextItemLike[],
   quote: string,
@@ -176,8 +172,7 @@ function escapeHtml(text: string): string {
 export const HIT_CLASS = "pdf-quote-hit";
 export const STRONG_CLASS = "pdf-quote-strong";
 
-// HTML for one text item with its hit range wrapped in <mark>, and the words at issue
-// in it in a nested <mark>, for the text layer
+// text-layer HTML for one item: hit range in <mark>, words at issue in a nested <mark>
 export function renderItemWithHit(str: string, range?: HitRange): string {
   if (!range) return escapeHtml(str);
   let inner = "";
@@ -204,8 +199,7 @@ export function renderItemWithHit(str: string, range?: HitRange): string {
   );
 }
 
-// Where the hit sits on the page, in PDF units: its horizontal extent and the tallest
-// font in it, enough to choose a zoom at which the quote is readable
+// hit's horizontal extent and tallest font (PDF units), enough to pick a readable zoom
 export interface HitBox {
   x0: number;
   x1: number;
@@ -234,9 +228,7 @@ export function hitBox(
   return x1 > x0 ? { x0, x1, fontHeight } : null;
 }
 
-// Zoom (1 = page fitted to the view's width) for showing a hit: its text about
-// `targetFontPx` tall on screen as long as the hit still fits about three quarters of
-// the view, and never smaller than `minFontPx`
+// zoom (1 = fit width) at which the hit is readable and fits 3/4 of the view
 export function zoomForHit(
   box: HitBox,
   pageWidth: number,

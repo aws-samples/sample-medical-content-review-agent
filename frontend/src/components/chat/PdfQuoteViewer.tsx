@@ -33,9 +33,9 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 export interface QuoteTarget {
   page: number;
   quote: string;
-  // The words at issue within the quote, highlighted more strongly
+  // the words at issue within the quote, highlighted more strongly
   spans?: string[];
-  // Changes on every click, so clicking the same finding again goes back to it
+  // changes on every click, so clicking the same finding again goes back to it
   nonce: number;
 }
 
@@ -44,11 +44,10 @@ const MAX_ZOOM = 6;
 const ZOOM_STEP = 1.25;
 const PAGE_GAP = 8;
 const PADDING = 8;
-// Browser canvas limits: a side of 32,767 px and about 268 MP. A zoomed tall page is
-// drawn at a lower pixel ratio rather than not at all
+// canvas limits (32,767 px a side, ~268 MP): tall zoomed pages get a lower pixel ratio
 const MAX_CANVAS_SIDE = 32000;
 const MAX_CANVAS_AREA = 200_000_000;
-// Pages drawn beyond the visible ones, in viewport heights, so scrolling stays smooth
+// pages drawn beyond the visible ones, in viewport heights, so scrolling stays smooth
 const OVERSCAN = 1;
 
 interface Pending {
@@ -68,16 +67,16 @@ export default function PdfQuoteViewer({
   const [viewHeight, setViewHeight] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
   const [zoom, setZoom] = useState(1);
-  // PDF-unit size of every page, read once the document loads
+  // size of every page in PDF units, read once the document loads
   const [sizes, setSizes] = useState<{ w: number; h: number }[]>([]);
   const [hits, setHits] = useState<{
     nonce: number;
     ranges: HitRange[] | null;
   } | null>(null);
   const textItems = useRef(new Map<number, TextItemLike[]>());
-  // The scroll to make once the target page is drawn at the zoom chosen for it
+  // the scroll to make once the target page is drawn at the zoom chosen for it
   const pending = useRef<Pending | null>(null);
-  // The target whose quote has been looked for, so each click is located once
+  // the target whose quote has been looked for, so each click is located once
   const located = useRef<number | null>(null);
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
@@ -112,7 +111,7 @@ export default function PdfQuoteViewer({
         PADDING
       : 0;
 
-  // Keep the point at the centre of the view in place when the zoom changes
+  // keep the point at the center of the view in place when the zoom changes
   const prevZoom = useRef(zoom);
   useLayoutEffect(() => {
     const el = containerRef.current;
@@ -125,7 +124,7 @@ export default function PdfQuoteViewer({
       (el.scrollTop + el.clientHeight / 2) * ratio - el.clientHeight / 2;
   }, [zoom]);
 
-  // Ctrl + wheel (and trackpad pinch) zooms the document, not the whole app
+  // ctrl + wheel (and trackpad pinch) zooms the document, not the whole app
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -151,7 +150,7 @@ export default function PdfQuoteViewer({
     [tops],
   );
 
-  // Locate the quote on a page whose text is known, then pick the zoom to show it at
+  // locate the quote on a page whose text is known, then pick the zoom to show it at
   const locate = useCallback(
     (page: number) => {
       const items = textItems.current.get(page);
@@ -169,7 +168,7 @@ export default function PdfQuoteViewer({
     [target, sizes, viewWidth],
   );
 
-  // A new target: go to its page at once, so it is drawn and its text can be read
+  // a new target: go to its page at once, so it is drawn and its text can be read
   const lastNonce = useRef<number | null>(null);
   useEffect(() => {
     if (!target || !sizes.length || lastNonce.current === target.nonce) return;
@@ -178,7 +177,7 @@ export default function PdfQuoteViewer({
     locate(target.page);
   }, [target, sizes, scrollToPageTop, locate]);
 
-  // Centre the highlighted quote once its page is drawn at the chosen zoom
+  // center the highlighted quote once its page is drawn at the chosen zoom
   const scrollToHit = useCallback(() => {
     const want = pending.current;
     const el = containerRef.current;
@@ -236,7 +235,7 @@ export default function PdfQuoteViewer({
     setSizes(out);
   };
 
-  // Only the pages in or near the view are drawn; the rest keep their place empty
+  // only the pages in or near the view are drawn; the rest keep their place empty
   const drawn = new Set<number>();
   const lo = scrollTop - OVERSCAN * viewHeight;
   const hi = scrollTop + (1 + OVERSCAN) * viewHeight;
@@ -247,7 +246,7 @@ export default function PdfQuoteViewer({
   });
   if (target) drawn.add(target.page);
 
-  // Hand tool: press and drag to move the page; off, the text can be selected
+  // hand tool: press and drag to move the page; off, the text can be selected
   const [hand, setHand] = useState(true);
   const [dragging, setDragging] = useState(false);
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {

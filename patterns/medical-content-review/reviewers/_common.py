@@ -51,6 +51,18 @@ read_s3_text = read_text
 
 
 def claims_report_key(session_id: str) -> str:
+    """The S3 key of a session's claims report
+
+    Parameters
+    ----------
+    session_id : str
+        The review session id, sanitized before it goes into the key
+
+    Returns
+    -------
+    str
+        The key of the session's `claims_report.json` under the claims prefix
+    """
     return f"{CLAIMS_PREFIX}/{safe_session_id(session_id)}/claims_report.json"
 
 
@@ -103,7 +115,7 @@ FINDINGS_SCHEMA_HINT = """Each finding object must have these fields:
 - `page`: int, page number the issue was found on
 - `quote`: str, exact quote from the document
 - `headline`: str, the problem in at most 10 words, for a reviewer scanning a list
-  ("Superlative: 'the only'", "'reduced' became 'reduces'", "Misspelt 'psoratic'")
+  ("Superlative: 'the only'", "'reduced' became 'reduces'", "Misspelled 'psoratic'")
 - `issue_spans`: list of str, the words of `quote` that are the problem, each copied
   exactly from `quote` and a few words long ("the only", "reduces"); [] when the problem
   is the whole quote or something missing from it
@@ -169,19 +181,25 @@ def build_claims_context(matched_claims_s3_uri: str | None) -> str:
 
     sections = [
         (
-            "Already approved word for word by a human reviewer — do NOT flag these"
-            " and do not spend lookups on them:",
+            (
+                "Already approved word for word by a human reviewer — do NOT flag"
+                " these and do not spend lookups on them:"
+            ),
             buckets["exact"],
         ),
         (
-            "Same assertion as an approved claim but with deviated wording. The"
-            " deviation is already recorded; verify whether what the content actually"
-            " says is supportable:",
+            (
+                "Same assertion as an approved claim but with deviated wording. The"
+                " deviation is already recorded; verify whether what the content"
+                " actually says is supportable:"
+            ),
             buckets["partial"],
         ),
         (
-            "Not covered by the claims library, so nothing is known about them yet."
-            " These are your priority — verify each one:",
+            (
+                "Not covered by the claims library, so nothing is known about them yet."
+                " These are your priority — verify each one:"
+            ),
             buckets["none"],
         ),
     ]
@@ -214,16 +232,27 @@ def parse_tagged_json_array(text: str, tag: str) -> list[dict] | None:
     when no payload is a JSON array, so a reply with no answer is told apart from an
     empty answer. When the model emits several tagged blocks ("Wait, correcting:
     ..."), the last one that parses is its answer.
+
+    Parameters
+    ----------
+    text : str
+        The model's final reply
+    tag : str
+        The tag name the array is wrapped in, without angle brackets
+
+    Returns
+    -------
+    list[dict] | None
+        The objects of the last parsable array, or None when no block parses as one
     """
     blocks = re.findall(rf"<{tag}>(.*?)</{tag}>", text, re.DOTALL) or [text]
     for block in reversed(blocks):
-        # Strip accidental ```json fences
+        # strip accidental ```json fences
         payload = re.sub(r"^```(?:json)?\s*|\s*```$", "", block.strip()).strip()
         try:
             data = json.loads(payload)
         except json.JSONDecodeError:
-            # copy quoted from markdown keeps its escapes ("\*All trials ..."), which
-            # are not JSON escapes
+            # copy quoted from markdown keeps escapes ("\*All trials ...") JSON rejects
             try:
                 data = json.loads(INVALID_ESCAPE_RE.sub(r"\\\\", payload))
             except json.JSONDecodeError:
@@ -240,7 +269,19 @@ def run_inner_agent(
 ) -> list[dict] | None:
     """Run a narrow sub-agent that answers with one JSON array in <findings> tags
 
-    Returns None when the reply holds no parsable array.
+    Parameters
+    ----------
+    system_prompt : str
+        The sub-agent's system prompt
+    user_prompt : str
+        The single user turn the sub-agent answers
+    tools : list
+        The tools the sub-agent may call
+
+    Returns
+    -------
+    list[dict] | None
+        The parsed findings, or None when the reply holds no parsable array
     """
     text = run_inner_agent_text(system_prompt, user_prompt, tools)
     return parse_tagged_json_array(text, "findings")
@@ -249,7 +290,24 @@ def run_inner_agent(
 def reviewer_findings(
     findings: list[dict] | None, session_id: str, stage: str, batch: str
 ) -> list[dict]:
-    """Findings to save for a batch, noting a reply that had none to parse"""
+    """Findings to save for a batch, noting a reply that had none to parse
+
+    Parameters
+    ----------
+    findings : list[dict] | None
+        The parsed findings, None when the reply had none to parse
+    session_id : str
+        The review session the issue is noted against
+    stage : str
+        The pipeline stage named in the noted issue
+    batch : str
+        The batch the findings belong to
+
+    Returns
+    -------
+    list[dict]
+        The findings, or an empty list when there were none to parse
+    """
     if findings is None:
         note_issue(
             session_id,

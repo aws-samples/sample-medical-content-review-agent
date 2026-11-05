@@ -11,7 +11,7 @@ parsable answer). When the request ends, the record is written next to the findi
 import json
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import PurePosixPath
 
 from utils.s3 import STAGING_BUCKET, put_json, safe_session_id
@@ -71,15 +71,53 @@ def note_issue(
 
 
 def _take_issues(session_id: str) -> list[dict]:
+    """Remove and return the issues noted for a session
+
+    Parameters
+    ----------
+    session_id : str
+        Session the review runs under
+
+    Returns
+    -------
+    list[dict]
+        The issues noted with :func:`note_issue`, oldest first
+    """
     with _lock:
         return _issues.pop(safe_session_id(session_id), [])
 
 
 def _stem(s3_uri: object) -> str:
+    """File name of an S3 URI without its extension
+
+    Parameters
+    ----------
+    s3_uri : object
+        S3 URI, or None
+
+    Returns
+    -------
+    str
+        The stem, or `""` when there is no URI
+    """
     return PurePosixPath(str(s3_uri or "")).stem
 
 
 def _batch_of(tool: str, tool_input: dict) -> str:
+    """Name of the batch a per-batch tool call worked on
+
+    Parameters
+    ----------
+    tool : str
+        Tool name
+    tool_input : dict
+        Arguments the tool was called with
+
+    Returns
+    -------
+    str
+        The batch name, or `""` for tools that do not run per batch
+    """
     if tool == "match_claims":
         return _stem(tool_input.get("extracted_claims_s3_uri")).replace(
             "extracted_", "", 1
@@ -90,7 +128,20 @@ def _batch_of(tool: str, tool_input: dict) -> str:
 
 
 def _summary(tool: str, text: str) -> dict:
-    """The small fields of a tool's JSON reply: counts, totals and batch names"""
+    """The small fields of a tool's JSON reply: counts, totals and batch names
+
+    Parameters
+    ----------
+    tool : str
+        Tool name
+    text : str
+        The tool's reply
+
+    Returns
+    -------
+    dict
+        The reply's fields other than URIs, or {} when it is not a JSON object
+    """
     try:
         reply = json.loads(text.split("\n\n[", 1)[0])
     except (json.JSONDecodeError, TypeError):
@@ -119,14 +170,28 @@ class RunRecorder:
         references_expected: bool,
         external_expected: bool,
     ):
+        """Start the record for one review request
+
+        Parameters
+        ----------
+        session_id : str
+            Session the review runs under
+        content_pdf_uri : str
+            S3 URI of the content PDF under review
+        claims_expected : bool
+            Whether the claims stages should run
+        references_expected : bool
+            Whether the internal reviewer should run
+        external_expected : bool
+            Whether the external reviewer should run
+        """
         self.session_id = session_id
         self.content_pdf_uri = content_pdf_uri
         self.claims_expected = claims_expected
-        # without references the internal reviewer has nothing to check, so skipping it
-        # loses nothing
+        # with no references the internal reviewer has nothing to check, so skip it
         self.references_expected = references_expected
         self.external_expected = external_expected
-        self.started_at = datetime.now(timezone.utc)
+        self.started_at = datetime.now(UTC)
         self._t0 = time.monotonic()
         self.calls: list[dict] = []
         self._lock = threading.Lock()
@@ -153,7 +218,6 @@ class RunRecorder:
             The tool's reply, when it returned one
         error : str
             The exception it raised, when it did
-
         """
         status = "error" if error else "success"
         now = time.monotonic()
@@ -176,11 +240,35 @@ class RunRecorder:
             self.calls.append(call)
 
     def _succeeded(self, stage: str) -> list[dict]:
+        """The successful calls recorded for a stage
+
+        Parameters
+        ----------
+        stage : str
+            Stage name, as in :data:`TOOL_STAGES`
+
+        Returns
+        -------
+        list[dict]
+            The calls, in the order they were recorded
+        """
         return [
             c for c in self.calls if c["stage"] == stage and c["status"] == "success"
         ]
 
     def _stages(self, issues: list[dict]) -> dict:
+        """Decide, for every stage the request should run, whether it completed
+
+        Parameters
+        ----------
+        issues : list[dict]
+            The issues noted for the session
+
+        Returns
+        -------
+        dict
+            Per stage, `ok` plus any missing batches and failure count
+        """
         batch_calls = self._succeeded("batch")
         batches = (
             [b["batch"] for b in (batch_calls[-1]["summary"].get("batches") or [])]
@@ -249,7 +337,7 @@ class RunRecorder:
             "session_id": self.session_id,
             "content_pdf_uri": self.content_pdf_uri,
             "started_at": self.started_at.isoformat(timespec="seconds"),
-            "finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "finished_at": datetime.now(UTC).isoformat(timespec="seconds"),
             "seconds": round(time.monotonic() - self._t0, 1),
             "completed": error is None and all(s["ok"] for s in stages.values()),
             "error": error or "",

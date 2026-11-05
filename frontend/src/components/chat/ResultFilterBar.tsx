@@ -12,8 +12,7 @@ import {
   toggleValue,
 } from "./resultFilters";
 
-// Pinned to the top of the results pane: the search and the count stay visible while
-// the list scrolls, and the chips open and close on demand
+// sticky atop the results pane (search and count stay in view); chips open on demand
 export function ResultFilterBar<T>({
   items,
   facets,
@@ -29,7 +28,7 @@ export function ResultFilterBar<T>({
   onChange: (state: FilterState) => void;
   searchText: (item: T) => string;
   searchPlaceholder: string;
-  // How many items are shown after filtering, and of how many
+  // how many items are shown after filtering, and of how many
   shown: { count: number; total: number; noun: string };
 }) {
   const [open, setOpen] = useState(false);
@@ -43,7 +42,7 @@ export function ResultFilterBar<T>({
     0,
   );
   return (
-    // -top-4 / -mx-4 cancel the pane's padding, so the bar sticks to its very top
+    // cancel the pane's padding (-top-4 / -mx-4) so the bar sticks to its very top
     <div className="sticky -top-4 z-10 -mx-4 mb-3 px-4 pt-4 pb-2 bg-white border-b border-gray-200 shadow-sm">
       <div className="flex items-center gap-2">
         <input
