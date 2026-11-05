@@ -2,8 +2,26 @@
 // SPDX-License-Identifier: MIT-0
 "use client";
 
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ReactNode,
+  Suspense,
+  lazy,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { QuoteTarget } from "./PdfQuoteViewer";
+import { ResultFilterBar } from "./ResultFilterBar";
+import {
+  type Facet,
+  type FilterState,
+  EMPTY_FILTERS,
+  applyFilters,
+  groupByQuote,
+  selectOnly,
+  sortCardsBySeverity,
+} from "./resultFilters";
 
 // pdf.js is large, so the viewer loads only once a PDF is shown
 const PdfQuoteViewer = lazy(() => import("./PdfQuoteViewer"));
@@ -27,6 +45,9 @@ export function PdfPane({
 export interface ReviewIssue {
   page: number;
   quote: string;
+  // The problem in a few words, and the words of the quote that are the problem
+  headline?: string;
+  issue_spans?: string[];
   issue: string;
   fix: string;
   reference: string;
@@ -39,12 +60,26 @@ export interface ReviewIssue {
   claim_id?: string;
   // Which kind of exact match it is: "verbatim", "reordered", "segment", or ""
   claim_precision?: string;
+  // Every page the same quote is flagged on by the same check; page is the first
+  pages?: number[];
+  // The kind of check that raised the finding (library_deviation, editorial, ...)
+  check?: string;
+  // Shared by every finding on the same quote, for showing them on one card
+  quote_group?: string;
+}
+
+function pagesLabel(issue: ReviewIssue): string {
+  const pages = issue.pages && issue.pages.length > 1 ? issue.pages : null;
+  return pages ? `Pages ${pages.join(", ")}` : `Page ${issue.page}`;
 }
 
 export type ClaimMatchStatus = "exact" | "partial" | "none";
 
 // The two views of a finished review: the claim-match table and the findings list
 type ResultsTab = "issues" | "claims";
+
+type IssueView = "open" | "addressed";
+type IssueSort = "severity" | "page";
 
 // An exact match is the approved copy as written, the same words rearranged, or one
 // line of an approved claim that bundles several (a headline and its subline)
@@ -449,60 +484,226 @@ export function ClaimsLibraryPreview({
 // The claim-match results, rendered as one of the two tabs of the right-hand panel.
 // Matching and issues are read one at a time, so they share the panel instead of
 // pushing the document preview further down the page.
+// The kind of check behind a finding, as `check` carries it, with its section colour
+const CHECK_LABELS: Record<string, string> = {
+  library_deviation: "Library deviation",
+  library_status: "Library status",
+  library_audience: "Other audience",
+  library: "Claims library",
+  editorial: "Editorial",
+  substantiation: "Substantiation",
+};
+
+const CHECK_COLOURS: Record<string, string> = {
+  library_deviation: "border-l-amber-500 bg-amber-50",
+  library_status: "border-l-red-500 bg-red-50",
+  library_audience: "border-l-rose-500 bg-rose-50",
+  library: "border-l-amber-500 bg-amber-50",
+  editorial: "border-l-sky-500 bg-sky-50",
+  substantiation: "border-l-indigo-500 bg-indigo-50",
+};
+
+const CHECK_ORDER = Object.keys(CHECK_LABELS);
+
+function checkLabel(check?: string): string {
+  return (check && CHECK_LABELS[check]) || check || "Finding";
+}
+
+function severity(score: number): string {
+  if (score >= 90) return "critical";
+  if (score >= 70) return "high";
+  return "medium";
+}
+
+const CLAIM_FACETS: Facet<ClaimMatch>[] = [
+  {
+    id: "match",
+    label: "Match",
+    values: (c) => (c.match_status ? [c.match_status] : null),
+    valueLabels: CLAIM_MATCH_LABELS,
+    order: ["exact", "partial", "none"],
+  },
+  {
+    id: "precision",
+    label: "Exact kind",
+    values: (c) =>
+      c.match_status === "exact" && c.match_precision
+        ? [c.match_precision]
+        : null,
+    valueLabels: MATCH_PRECISION_LABELS,
+    order: ["verbatim", "reordered", "segment"],
+  },
+  {
+    id: "usable",
+    label: "Library",
+    values: (c) =>
+      c.library_claim_usable === true
+        ? ["usable"]
+        : c.library_claim_usable === false
+          ? [c.audience_approved === false ? "audience" : "unusable"]
+          : null,
+    valueLabels: {
+      usable: "Usable",
+      unusable: "Not usable",
+      audience: "Other audience",
+    },
+    order: ["usable", "unusable", "audience"],
+  },
+  {
+    id: "page",
+    label: "Page",
+    values: (c) => [String(c.page)],
+  },
+];
+
+function claimSearchText(c: ClaimMatch): string {
+  return [c.text, c.deviation, c.matched_claim_id, c.matched_claim_text].join(
+    " ",
+  );
+}
+
+// Mandatory findings are what to fix; optional notes are one chip away
+const DEFAULT_ISSUE_FILTERS: FilterState = {
+  selected: { type: ["mandatory"] },
+  search: "",
+};
+
+const ISSUE_FACETS: Facet<ReviewIssue>[] = [
+  {
+    id: "type",
+    label: "Type",
+    values: (i) => (i.type ? [i.type] : null),
+    valueLabels: { mandatory: "Mandatory", optional: "Optional" },
+    order: ["mandatory", "optional"],
+  },
+  {
+    id: "severity",
+    label: "Severity",
+    values: (i) => [severity(i.score)],
+    valueLabels: { critical: "Critical", high: "High", medium: "Medium/Low" },
+    order: ["critical", "high", "medium"],
+  },
+  {
+    id: "check",
+    label: "Check",
+    values: (i) => (i.check ? [i.check] : null),
+    valueLabels: CHECK_LABELS,
+    order: CHECK_ORDER,
+  },
+  {
+    id: "claim",
+    label: "Claim match",
+    values: (i) =>
+      i.claim_match && isClaimMatchStatus(i.claim_match)
+        ? [i.claim_match]
+        : null,
+    valueLabels: CLAIM_MATCH_LABELS,
+    order: ["exact", "partial", "none"],
+  },
+  {
+    id: "page",
+    label: "Page",
+    values: (i) => (i.pages && i.pages.length ? i.pages : [i.page]).map(String),
+  },
+];
+
+function issueSearchText(i: ReviewIssue): string {
+  return [i.quote, i.headline, i.issue, i.fix, i.reference, i.source].join(" ");
+}
+
 function ClaimsMatchingTab({
   claimsReport,
+  filters,
+  onFiltersChange,
   onSelectClaim,
+  selectedRef,
 }: {
   claimsReport: ClaimsReport;
+  filters: FilterState;
+  onFiltersChange: (state: FilterState) => void;
   // Shows the claim highlighted in the content document
   onSelectClaim: (claim: ClaimMatch) => void;
+  selectedRef: string | null;
 }) {
   const audience = claimsReport.asset_audience?.audience;
+  const shown = applyFilters(
+    claimsReport.claims,
+    CLAIM_FACETS,
+    filters,
+    claimSearchText,
+  );
   const counts: {
     value: number;
     label: string;
+    status: ClaimMatchStatus | null;
     border: string;
     text: string;
   }[] = [
     {
       value: claimsReport.total_claims,
       label: "Claims Extracted",
+      status: null,
       border: "border-gray-200",
       text: "text-indigo-600",
     },
     {
       value: claimsReport.counts.exact,
       label: "Exact Match",
+      status: "exact",
       border: "border-green-200",
       text: "text-green-600",
     },
     {
       value: claimsReport.counts.partial,
       label: "Partial Match",
+      status: "partial",
       border: "border-amber-200",
       text: "text-amber-600",
     },
     {
       value: claimsReport.counts.none,
       label: "No Match",
+      status: "none",
       border: "border-slate-200",
       text: "text-slate-600",
     },
   ];
+  const selectedMatch = filters.selected.match ?? [];
   return (
     <div>
+      {/* Each count is a shortcut to the claims with that tag */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
-        {counts.map((count) => (
-          <div
-            key={count.label}
-            className={`rounded-xl border p-3 text-center ${count.border}`}
-          >
-            <p className={`text-2xl font-bold ${count.text}`}>{count.value}</p>
-            <p className="text-[11px] font-semibold text-gray-600 mt-0.5">
-              {count.label}
-            </p>
-          </div>
-        ))}
+        {counts.map((count) => {
+          const isSelected =
+            count.status !== null &&
+            selectedMatch.length === 1 &&
+            selectedMatch[0] === count.status;
+          return (
+            <button
+              key={count.label}
+              type="button"
+              aria-pressed={isSelected}
+              title={
+                count.status
+                  ? `Show only ${CLAIM_MATCH_LABELS[count.status].toLowerCase()}es`
+                  : "Show every claim"
+              }
+              onClick={() =>
+                onFiltersChange(selectOnly(filters, "match", count.status))
+              }
+              className={`rounded-xl border p-3 text-center transition-shadow hover:shadow-md ${
+                count.border
+              } ${isSelected ? "ring-2 ring-indigo-500" : ""}`}
+            >
+              <p className={`text-2xl font-bold ${count.text}`}>
+                {count.value}
+              </p>
+              <p className="text-[11px] font-semibold text-gray-600 mt-0.5">
+                {count.label}
+              </p>
+            </button>
+          );
+        })}
       </div>
       {audience && AUDIENCE_LABELS[audience] && (
         <p
@@ -514,12 +715,41 @@ function ClaimsMatchingTab({
         </p>
       )}
       <ClaimMatchLegend />
+      <ResultFilterBar
+        items={claimsReport.claims}
+        facets={CLAIM_FACETS}
+        state={filters}
+        onChange={onFiltersChange}
+        searchText={claimSearchText}
+        searchPlaceholder="Search claims"
+        shown={{
+          count: shown.length,
+          total: claimsReport.claims.length,
+          noun: "claims",
+        }}
+      />
+      {shown.length === 0 && (
+        <p className="text-sm text-gray-400 italic text-center py-6">
+          No claims match these filters.
+        </p>
+      )}
       <div className="space-y-2">
-        {claimsReport.claims.map((claim) => (
+        {shown.map((claim) => (
           <div
             key={claim.claim_ref}
-            className="border border-gray-200 rounded-lg px-3 py-2 cursor-pointer hover:shadow-md transition-all"
+            role="button"
+            tabIndex={0}
             onClick={() => onSelectClaim(claim)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onSelectClaim(claim);
+            }}
+            aria-pressed={selectedRef === claim.claim_ref}
+            title="Show in the document"
+            className={`border rounded-lg px-3 py-2 cursor-pointer hover:shadow-md transition-shadow ${
+              selectedRef === claim.claim_ref
+                ? "border-indigo-400 ring-2 ring-indigo-500"
+                : "border-gray-200"
+            }`}
           >
             <div className="flex items-center gap-2 mb-1.5 flex-wrap">
               <span className="text-[10px] font-bold bg-gray-800 text-white px-2 py-0.5 rounded-full">
@@ -643,6 +873,158 @@ function DocumentPreviewHeader({
   );
 }
 
+function SegmentedToggle<V extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: V;
+  options: { value: V; label: string }[];
+  onChange: (value: V) => void;
+}) {
+  return (
+    <div role="group" aria-label={label} className="flex items-center gap-1">
+      <span className="text-gray-500">{label}:</span>
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          aria-pressed={option.value === value}
+          onClick={() => onChange(option.value)}
+          className={`font-semibold px-2 py-0.5 rounded-full border ${
+            option.value === value
+              ? "bg-indigo-600 text-white border-indigo-600"
+              : "bg-white text-gray-700 border-gray-300 hover:border-indigo-400"
+          }`}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function maxScore(items: ReviewIssue[]): number {
+  return Math.max(0, ...items.map((i) => i.score));
+}
+
+// Every finding's words at issue on a card, without repeats
+export function cardSpans(items: ReviewIssue[]): string[] {
+  const out: string[] = [];
+  for (const i of items)
+    for (const span of i.issue_spans ?? [])
+      if (span && !out.some((s) => s.toLowerCase() === span.toLowerCase()))
+        out.push(span);
+  return out;
+}
+
+// The quote with the words at issue in bold, matched case-insensitively
+export function HighlightedQuote({
+  quote,
+  spans,
+}: {
+  quote: string;
+  spans: string[];
+}) {
+  const marks: [number, number][] = [];
+  const lower = quote.toLowerCase();
+  for (const span of spans) {
+    const at = lower.indexOf(span.toLowerCase());
+    if (at >= 0) marks.push([at, at + span.length]);
+  }
+  marks.sort((a, b) => a[0] - b[0]);
+  const parts: ReactNode[] = [];
+  let pos = 0;
+  for (const [start, end] of marks) {
+    if (start < pos) continue;
+    if (start > pos) parts.push(quote.slice(pos, start));
+    parts.push(
+      <mark
+        key={start}
+        className="bg-red-100 text-red-900 font-semibold not-italic rounded px-0.5"
+      >
+        {quote.slice(start, end)}
+      </mark>,
+    );
+    pos = end;
+  }
+  parts.push(quote.slice(pos));
+  return <>{parts}</>;
+}
+
+// One finding inside a quote card: its kind of check and headline, the fix, and the
+// full issue, reference and source behind a details toggle
+function FindingSection({ issue }: { issue: ReviewIssue }) {
+  const headline = issue.headline?.trim();
+  const details = (
+    <>
+      <p className="text-gray-700">
+        <strong className="text-gray-900">Issue:</strong> {issue.issue}
+      </p>
+      {issue.reference && (
+        <p className="text-gray-600">
+          <strong>Reference:</strong> {issue.reference}
+        </p>
+      )}
+      {issue.source && (
+        <p className="text-gray-500">
+          <strong>Source:</strong> {issue.source}
+        </p>
+      )}
+    </>
+  );
+  return (
+    <div
+      className={`border-l-4 rounded px-3 py-2.5 ${
+        CHECK_COLOURS[issue.check ?? ""] ?? "border-l-gray-400 bg-gray-50"
+      }`}
+    >
+      <div className="flex items-center gap-1.5 flex-wrap mb-1.5">
+        <span className="text-[10px] font-bold uppercase tracking-wide text-gray-700">
+          {checkLabel(issue.check)}
+        </span>
+        <span className="text-[10px] text-gray-500">
+          · {issue.type} · {issue.score}/100
+        </span>
+        {isClaimMatchStatus(issue.claim_match) && (
+          <ClaimMatchBadge
+            status={issue.claim_match}
+            claimId={issue.claim_id}
+            precision={issue.claim_precision}
+          />
+        )}
+      </div>
+      <div className="space-y-1.5 text-xs">
+        {headline && (
+          <p className="text-sm font-semibold text-gray-900">{headline}</p>
+        )}
+        {issue.fix && (
+          <p className="text-gray-700">
+            <strong className="text-green-700">Fix:</strong> {issue.fix}
+          </p>
+        )}
+        {headline ? (
+          <details
+            className="group"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            <summary className="cursor-pointer select-none text-[11px] font-semibold text-indigo-700 hover:text-indigo-900 list-none">
+              <span className="group-open:hidden">Show details ›</span>
+              <span className="hidden group-open:inline">Hide details ‹</span>
+            </summary>
+            <div className="mt-1.5 space-y-1.5">{details}</div>
+          </details>
+        ) : (
+          details
+        )}
+      </div>
+    </div>
+  );
+}
+
 function getSeverityColor(score: number) {
   if (score >= 90) return "bg-red-50 border-l-red-600";
   if (score >= 70) return "bg-orange-50 border-l-orange-600";
@@ -672,6 +1054,28 @@ export function ReviewResultsPanel({
 }: ReviewResultsPanelProps) {
   // The quote to show highlighted in the content document
   const [quoteTarget, setQuoteTarget] = useState<QuoteTarget | null>(null);
+  // The finding card or claim row last clicked, shown highlighted in the document
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [issueFilters, setIssueFilters] = useState<FilterState>(
+    DEFAULT_ISSUE_FILTERS,
+  );
+  const [claimFilters, setClaimFilters] = useState<FilterState>(EMPTY_FILTERS);
+  // Quote groups the user has marked as addressed, for this review only
+  const [addressed, setAddressed] = useState<Set<string>>(() => new Set());
+  const [issueView, setIssueView] = useState<IssueView>("open");
+  const [issueSort, setIssueSort] = useState<IssueSort>("severity");
+  // Filters belong to one review: reset them when a new one's results arrive
+  const [filtersFor, setFiltersFor] = useState({ issues, claimsReport });
+  if (
+    filtersFor.issues !== issues ||
+    filtersFor.claimsReport !== claimsReport
+  ) {
+    setFiltersFor({ issues, claimsReport });
+    setIssueFilters(DEFAULT_ISSUE_FILTERS);
+    setClaimFilters(EMPTY_FILTERS);
+    setAddressed(new Set());
+    setIssueView("open");
+  }
   const [activePreviewIdx, setActivePreviewIdx] = useState<number>(0);
   // null until the user picks a tab, so the default can follow the results without
   // overriding a choice they have already made
@@ -708,19 +1112,74 @@ export function ReviewResultsPanel({
     ? resultsTab ?? (issues.length === 0 ? "claims" : "issues")
     : "issues";
 
-  const stats = useMemo(
-    () => ({
-      total: issues.length,
-      critical: issues.filter((i) => i.score >= 90).length,
-      high: issues.filter((i) => i.score >= 70 && i.score < 90).length,
-      medium: issues.filter((i) => i.score < 70).length,
-    }),
+  // Every finding keyed by its card, so a card keeps its key when others are filtered out
+  const keyedIssues = useMemo(
+    () =>
+      issues.map((i, idx) =>
+        i.quote_group ? i : { ...i, quote_group: `#${idx}` },
+      ),
     [issues],
   );
+  const openIssues = useMemo(
+    () => keyedIssues.filter((i) => !addressed.has(i.quote_group!)),
+    [keyedIssues, addressed],
+  );
+  const viewIssues = useMemo(
+    () =>
+      issueView === "open"
+        ? openIssues
+        : keyedIssues.filter((i) => addressed.has(i.quote_group!)),
+    [issueView, openIssues, keyedIssues, addressed],
+  );
+
+  // The counts are over the open mandatory findings, the ones left to fix
+  const stats = useMemo(() => {
+    const toFix = openIssues.filter((i) => i.type === "mandatory");
+    return {
+      total: toFix.length,
+      critical: toFix.filter((i) => i.score >= 90).length,
+      high: toFix.filter((i) => i.score >= 70 && i.score < 90).length,
+      medium: toFix.filter((i) => i.score < 70).length,
+      optional: openIssues.length - toFix.length,
+    };
+  }, [openIssues]);
+
+  const shownIssues = useMemo(
+    () => applyFilters(viewIssues, ISSUE_FACETS, issueFilters, issueSearchText),
+    [viewIssues, issueFilters],
+  );
+  const issueCards = useMemo(() => {
+    const cards = groupByQuote(shownIssues);
+    return issueSort === "severity" ? sortCardsBySeverity(cards) : cards;
+  }, [shownIssues, issueSort]);
+
+  // Findings on each quote, filtered or not, so a card can say how many it hides
+  const groupSizes = useMemo(() => {
+    const sizes = new Map<string, number>();
+    for (const i of keyedIssues)
+      sizes.set(i.quote_group!, (sizes.get(i.quote_group!) ?? 0) + 1);
+    return sizes;
+  }, [keyedIssues]);
+
+  const toggleAddressed = (key: string) =>
+    setAddressed((current) => {
+      const next = new Set(current);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
+
+  const filterSeverity = (value: string | null) => {
+    const mandatory = {
+      ...issueFilters,
+      selected: { ...issueFilters.selected, type: ["mandatory"] },
+    };
+    setIssueFilters(selectOnly(mandatory, "severity", value));
+    setResultsTab("issues");
+  };
 
   // Switch to the content document and highlight a quote on its page
-  const showQuote = (page: number, quote: string) => {
-    setQuoteTarget({ page, quote, nonce: Date.now() });
+  const showQuote = (page: number, quote: string, spans?: string[]) => {
+    setQuoteTarget({ page, quote, spans, nonce: Date.now() });
     const contentIdx = previewTabs.findIndex((t) => t.kind === "content");
     if (contentIdx >= 0) setActivePreviewIdx(contentIdx);
   };
@@ -1115,8 +1574,11 @@ export function ReviewResultsPanel({
               </h2>
               <p className="text-gray-600 mt-1">
                 {stats.total === 0
-                  ? "No issues detected in your document"
-                  : `${stats.total} issues detected in your document`}
+                  ? "No mandatory issues to fix in your document"
+                  : `${stats.total} mandatory ${stats.total === 1 ? "issue" : "issues"} to fix in your document`}
+                {stats.optional > 0
+                  ? ` · ${stats.optional} optional ${stats.optional === 1 ? "note" : "notes"}`
+                  : ""}
                 {claimsReport
                   ? ` · ${claimsReport.total_claims} claims matched against the library`
                   : ""}
@@ -1165,32 +1627,64 @@ export function ReviewResultsPanel({
           </div>
         </div>
 
-        {/* Stats Bar */}
+        {/* Stats Bar: each count is a shortcut to that severity */}
         <div className="grid grid-cols-4 gap-4 mb-6">
-          <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-6 text-center">
-            <p className="text-4xl font-bold text-indigo-600 mb-2">
-              {stats.total}
-            </p>
-            <p className="text-sm font-semibold text-gray-600">Total Issues</p>
-          </div>
-          <div className="bg-white rounded-xl shadow-lg border border-red-200 p-6 text-center">
-            <p className="text-4xl font-bold text-red-600 mb-2">
-              {stats.critical}
-            </p>
-            <p className="text-sm font-semibold text-gray-600">Critical</p>
-          </div>
-          <div className="bg-white rounded-xl shadow-lg border border-orange-200 p-6 text-center">
-            <p className="text-4xl font-bold text-orange-600 mb-2">
-              {stats.high}
-            </p>
-            <p className="text-sm font-semibold text-gray-600">High</p>
-          </div>
-          <div className="bg-white rounded-xl shadow-lg border border-yellow-200 p-6 text-center">
-            <p className="text-4xl font-bold text-yellow-600 mb-2">
-              {stats.medium}
-            </p>
-            <p className="text-sm font-semibold text-gray-600">Medium/Low</p>
-          </div>
+          {(
+            [
+              {
+                value: stats.total,
+                label: "To Fix",
+                severity: null,
+                border: "border-gray-200",
+                text: "text-indigo-600",
+              },
+              {
+                value: stats.critical,
+                label: "Critical",
+                severity: "critical",
+                border: "border-red-200",
+                text: "text-red-600",
+              },
+              {
+                value: stats.high,
+                label: "High",
+                severity: "high",
+                border: "border-orange-200",
+                text: "text-orange-600",
+              },
+              {
+                value: stats.medium,
+                label: "Medium/Low",
+                severity: "medium",
+                border: "border-yellow-200",
+                text: "text-yellow-600",
+              },
+            ] as const
+          ).map((card) => {
+            const selected = issueFilters.selected.severity ?? [];
+            const isSelected =
+              card.severity !== null &&
+              selected.length === 1 &&
+              selected[0] === card.severity;
+            return (
+              <button
+                key={card.label}
+                type="button"
+                aria-pressed={isSelected}
+                onClick={() => filterSeverity(card.severity)}
+                className={`bg-white rounded-xl shadow-lg border p-6 text-center transition-shadow hover:shadow-xl ${
+                  card.border
+                } ${isSelected ? "ring-4 ring-indigo-400" : ""}`}
+              >
+                <p className={`text-4xl font-bold mb-2 ${card.text}`}>
+                  {card.value}
+                </p>
+                <p className="text-sm font-semibold text-gray-600">
+                  {card.label}
+                </p>
+              </button>
+            );
+          })}
         </div>
 
         {/* Split-Pane: PDF left, Issues right */}
@@ -1282,70 +1776,153 @@ export function ReviewResultsPanel({
               {activeResultsTab === "claims" && claimsReport ? (
                 <ClaimsMatchingTab
                   claimsReport={claimsReport}
-                  onSelectClaim={(claim) => showQuote(claim.page, claim.text)}
+                  filters={claimFilters}
+                  onFiltersChange={setClaimFilters}
+                  selectedRef={selectedKey}
+                  onSelectClaim={(claim) => {
+                    setSelectedKey(claim.claim_ref);
+                    showQuote(claim.page, claim.text);
+                  }}
                 />
               ) : issues.length === 0 ? (
                 <p className="text-sm text-gray-400 italic text-center py-10">
                   No issues were detected in this document.
                 </p>
               ) : (
-                <div className="space-y-4">
-                  {issues.map((issue, idx) => (
-                    <div
-                      key={idx}
-                      className={`border-l-4 p-3 rounded-lg ${getSeverityColor(
-                        issue.score,
-                      )} cursor-pointer hover:shadow-lg transition-all`}
-                      onClick={() => showQuote(issue.page, issue.quote)}
-                    >
-                      <div className="flex justify-between items-start mb-2">
-                        <span className="text-xs font-bold bg-gray-800 text-white px-2 py-0.5 rounded-full">
-                          Page {issue.page}
-                        </span>
-                        <span
-                          className={`text-xs font-bold ${getSeverityBadge(
-                            issue.score,
-                          )} text-white px-2 py-0.5 rounded-full`}
+                <div>
+                  <ResultFilterBar
+                    items={viewIssues}
+                    facets={ISSUE_FACETS}
+                    state={issueFilters}
+                    onChange={setIssueFilters}
+                    searchText={issueSearchText}
+                    searchPlaceholder="Search findings"
+                    shown={{
+                      count: shownIssues.length,
+                      total: viewIssues.length,
+                      noun: "findings",
+                    }}
+                  />
+                  <div className="flex items-center justify-between gap-2 mb-3 text-[11px]">
+                    <SegmentedToggle
+                      label="Show"
+                      value={issueView}
+                      onChange={setIssueView}
+                      options={[
+                        { value: "open", label: `Open ${openIssues.length}` },
+                        {
+                          value: "addressed",
+                          label: `Addressed ${keyedIssues.length - openIssues.length}`,
+                        },
+                      ]}
+                    />
+                    <SegmentedToggle
+                      label="Sort"
+                      value={issueSort}
+                      onChange={setIssueSort}
+                      options={[
+                        { value: "severity", label: "Severity" },
+                        { value: "page", label: "Page" },
+                      ]}
+                    />
+                  </div>
+                  {issueCards.length === 0 && (
+                    <p className="text-sm text-gray-400 italic text-center py-6">
+                      {viewIssues.length === 0
+                        ? issueView === "open"
+                          ? "Every finding is marked as addressed."
+                          : "No finding is marked as addressed yet."
+                        : "No findings match these filters."}
+                    </p>
+                  )}
+                  <div className="space-y-4">
+                    {issueCards.map((card) => {
+                      const first = card.items[0];
+                      const score = maxScore(card.items);
+                      const hidden =
+                        (groupSizes.get(card.key) ?? card.items.length) -
+                        card.items.length;
+                      const isSelected = selectedKey === card.key;
+                      const open = () => {
+                        setSelectedKey(card.key);
+                        showQuote(first.page, first.quote, cardSpans(card.items));
+                      };
+                      return (
+                        <div
+                          key={card.key}
+                          role="button"
+                          tabIndex={0}
+                          aria-pressed={isSelected}
+                          title="Show in the document"
+                          className={`border-l-4 p-3 rounded-lg ${getSeverityColor(
+                            score,
+                          )} cursor-pointer hover:shadow-lg transition-all ${
+                            isSelected ? "ring-2 ring-indigo-500 shadow-lg" : ""
+                          }`}
+                          onClick={open}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") open();
+                          }}
                         >
-                          {issue.score}/100
-                        </span>
-                      </div>
-                      <h4 className="font-bold text-gray-900 text-xs mb-2 flex items-center gap-1.5 flex-wrap">
-                        <span className="text-base">⚠️</span>
-                        {issue.type}
-                        {isClaimMatchStatus(issue.claim_match) && (
-                          <ClaimMatchBadge
-                            status={issue.claim_match}
-                            claimId={issue.claim_id}
-                            precision={issue.claim_precision}
-                          />
-                        )}
-                      </h4>
-                      <div className="bg-white bg-opacity-60 rounded p-2 mb-2">
-                        <p className="text-xs text-gray-800 italic">
-                          &ldquo;{issue.quote}&rdquo;
-                        </p>
-                      </div>
-                      <div className="space-y-1.5 text-xs">
-                        <div>
-                          <strong className="text-gray-900">Issue:</strong>
-                          <p className="text-gray-700 mt-0.5">{issue.issue}</p>
+                          <div className="flex justify-between items-start mb-2">
+                            <span className="text-xs font-bold bg-gray-800 text-white px-2 py-0.5 rounded-full">
+                              {pagesLabel(first)}
+                            </span>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                aria-pressed={addressed.has(card.key)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleAddressed(card.key);
+                                }}
+                                onKeyDown={(e) => e.stopPropagation()}
+                                className="text-[11px] font-semibold px-2 py-0.5 rounded-full border border-gray-300 bg-white text-gray-700 hover:border-indigo-400"
+                              >
+                                {addressed.has(card.key)
+                                  ? "Reopen"
+                                  : "Mark addressed"}
+                              </button>
+                              <span
+                                className={`text-xs font-bold ${getSeverityBadge(
+                                  score,
+                                )} text-white px-2 py-0.5 rounded-full`}
+                              >
+                                {score}/100
+                              </span>
+                            </div>
+                          </div>
+                          <div className="bg-white bg-opacity-60 rounded p-2 mb-2.5">
+                            {first.quote?.trim() ? (
+                              <p className="text-xs text-gray-800 italic">
+                                &ldquo;
+                                <HighlightedQuote
+                                  quote={first.quote}
+                                  spans={cardSpans(card.items)}
+                                />
+                                &rdquo;
+                              </p>
+                            ) : (
+                              <p className="text-xs text-gray-600">
+                                Applies to the whole asset
+                              </p>
+                            )}
+                          </div>
+                          <div className="space-y-2.5">
+                            {card.items.map((issue, idx) => (
+                              <FindingSection key={idx} issue={issue} />
+                            ))}
+                          </div>
+                          {hidden > 0 && (
+                            <p className="text-[11px] text-gray-500 mt-1.5">
+                              {hidden} more finding{hidden > 1 ? "s" : ""} on
+                              this quote hidden by the filters
+                            </p>
+                          )}
                         </div>
-                        <div>
-                          <strong className="text-green-700">Fix:</strong>
-                          <p className="text-gray-700 mt-0.5">{issue.fix}</p>
-                        </div>
-                        <div className="pt-1.5 border-t border-gray-200">
-                          <p className="text-xs text-gray-600">
-                            <strong>Reference:</strong> {issue.reference}
-                          </p>
-                          <p className="text-xs text-gray-500 mt-0.5">
-                            <strong>Source:</strong> {issue.source}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>

@@ -9,7 +9,7 @@ from strands import tool
 from utils.s3 import list_keys, put_json, read_json, require_bucket, safe_session_id
 
 from reviewers._common import REVIEWS_PREFIX, claims_report_key
-from reviewers.claim_tags import tag_findings
+from reviewers.claim_tags import readable, tag_findings
 from reviewers.report import AGGREGATE_NAME, merge_repeats
 
 REVIEWER_KIND_RE = re.compile(
@@ -77,7 +77,7 @@ def get_reviews(session_id: str) -> str:
 
     # Re-derive the claim match tag in Python: a reviewer may have left it out, and the
     # tag has to be on every finding, not only the ones the model remembered to mark.
-    findings = tag_findings(findings, load_claim_records(session_id))
+    findings = readable(tag_findings(findings, load_claim_records(session_id)))
     reported = len(findings)
     findings = [
         {"id": f"F{index + 1}", **finding}

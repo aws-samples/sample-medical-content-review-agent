@@ -56,6 +56,9 @@ See the [deployment guide](docs/DEPLOYMENT.md) for detailed instructions.
    - Aggregates every reviewer's findings, merges a quote flagged on several pages into one finding, and asks an editor model which findings to merge and drop. Code applies those decisions under hard rules (claims-library and mandatory findings are never dropped, merged findings must be the same kind of check on the same page) and writes the final report
    - Records every step, its timing, and any failure it survived in `reviews/{session_id}/run_record.json`, with a verdict on whether the review completed
 6. Review detected issues in the results panel; expand **Pre-Approved Claims Matching** to see every claim and its tag; click an issue or a claim to see its quote highlighted in the PDF, zoomed so small print is readable; download the report as JSON
+   - Findings on the same quote share one card, sorted by severity or by page. Each finding leads with a short headline and the kind of check that raised it, with the full issue, reference and source a click away; the words at issue are marked in the quote and highlighted more strongly in the PDF
+   - Mandatory findings are shown by default. Faceted filters (type, severity, check, claim match, page) and a free-text search narrow both the findings and the claims; chips in one facet combine with OR and facets with AND, and each chip shows how many items it would keep. The severity tiles and claim-match counts are shortcuts to those filters
+   - Mark a card as addressed to move it out of the open list while you work through the review (kept for the current review only)
 
 ### Pre-approved claims
 
