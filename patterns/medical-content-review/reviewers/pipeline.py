@@ -34,11 +34,11 @@ from reviewers.review_aggregator import get_reviews
 from tools import batch_content, load_claims_library, process_pdf
 
 READY_TEXT = "Your review is ready."
-# A failed step is tried once more before the review gives up on it
+# a failed step is tried once more before the review gives up on it
 STEP_ATTEMPTS = 2
-# Results shown in the frontend are cut to this length; the pipeline keeps them whole
+# results shown in the frontend are cut to this length; the pipeline keeps them whole
 MAX_UI_TEXT = 3000
-# Link tags tools append to their results (`[REVIEW_URL:...]`, `[REPORT_XLSX_URL:...]`)
+# link tags tools append to their results (`[REVIEW_URL:...]`, `[REPORT_XLSX_URL:...]`)
 URL_TAG_RE = re.compile(r"\[[A-Z_]+_URL:[^\]]+\]")
 DECISIONS_RE = re.compile(r"<decisions>(.*?)</decisions>", re.DOTALL)
 EDITOR_PROMPT = load_prompt("editor")
@@ -57,9 +57,21 @@ class ReviewInputs:
 
 
 def _ui_text(text: str) -> str:
+    """A tool result cut to the length the frontend shows, keeping its link tags whole
+
+    Parameters
+    ----------
+    text : str
+        The tool's full result text
+
+    Returns
+    -------
+    str
+        The text unchanged when short enough, else the cut body followed by its tags
+    """
     if len(text) <= MAX_UI_TEXT:
         return text
-    # The frontend reads its links from these tags, so they survive the cut whole
+    # the frontend reads its links from these tags, so they survive the cut whole
     tags = URL_TAG_RE.findall(text)
     body = URL_TAG_RE.sub("", text).rstrip()
     if len(body) > MAX_UI_TEXT:
@@ -68,7 +80,18 @@ def _ui_text(text: str) -> str:
 
 
 def _reply(text: str) -> dict:
-    """The JSON part of a tool's reply, without the link tags after it"""
+    """The JSON part of a tool's reply, without the link tags after it
+
+    Parameters
+    ----------
+    text : str
+        The tool's reply, a JSON object optionally followed by link tags
+
+    Returns
+    -------
+    dict
+        The parsed JSON object
+    """
     return json.loads(text.split("\n\n[", 1)[0])
 
 
@@ -76,11 +99,32 @@ class _Steps:
     """Run tools in worker threads, record them, and queue their stream events"""
 
     def __init__(self, recorder: RunRecorder):
+        """Start with an empty event queue
+
+        Parameters
+        ----------
+        recorder : RunRecorder
+            The run record every tool call is written to
+        """
         self.recorder = recorder
         self.events: asyncio.Queue[dict | None] = asyncio.Queue()
         self._ids = itertools.count(1)
 
     async def run(self, tool, **tool_input) -> str:
+        """Run a tool in a worker thread, trying it once more if it fails
+
+        Parameters
+        ----------
+        tool : callable
+            The Strands tool to run
+        **tool_input
+            The keyword arguments the tool is called with
+
+        Returns
+        -------
+        str
+            The tool's result text
+        """
         name = tool.tool_name
         attempt = 1
         while True:
@@ -89,7 +133,7 @@ class _Steps:
             started = time.monotonic()
             try:
                 text = await asyncio.to_thread(tool, **tool_input)
-            except Exception as e:  # noqa: BLE001 - recorded, then retried or raised
+            except Exception as e:  # recorded, then retried or raised
                 error = str(e) or type(e).__name__
                 self.recorder.record(name, tool_input, started, error=error)
                 self._finished(tool_use_id, "error", error)
@@ -102,6 +146,17 @@ class _Steps:
             return text
 
     def _started(self, tool_use_id: str, name: str, tool_input: dict) -> None:
+        """Queue the stream events that show a tool call starting
+
+        Parameters
+        ----------
+        tool_use_id : str
+            The id of this tool call
+        name : str
+            The tool's name
+        tool_input : dict
+            The arguments the tool is called with
+        """
         tool_use = {"toolUseId": tool_use_id, "name": name}
         self.events.put_nowait(
             {
@@ -119,6 +174,17 @@ class _Steps:
         )
 
     def _finished(self, tool_use_id: str, status: str, text: str) -> None:
+        """Queue the stream event that shows a tool call's result
+
+        Parameters
+        ----------
+        tool_use_id : str
+            The id of the tool call that finished
+        status : str
+            `"success"` or `"error"`
+        text : str
+            The tool's result or error text, cut for the frontend
+        """
         self.events.put_nowait(
             {
                 "message": {
@@ -138,7 +204,18 @@ class _Steps:
 
 
 def _decisions(text: str) -> dict | None:
-    """The editor's drop and merge lists, or None when its reply holds none"""
+    """The editor's drop and merge lists, or None when its reply holds none
+
+    Parameters
+    ----------
+    text : str
+        The editor's reply, with its answer in `<decisions>` tags
+
+    Returns
+    -------
+    dict | None
+        `{"drop": [...], "merge": [[...], ...]}` with finding ids as strings, or None
+    """
     for block in reversed(DECISIONS_RE.findall(text) or [text]):
         try:
             data = json.loads(block.strip())
@@ -157,7 +234,20 @@ def _decisions(text: str) -> dict | None:
 
 
 async def _edit(session_id: str, aggregate_uri: str) -> dict:
-    """Ask the editor which findings to drop and merge; no decisions if it cannot say"""
+    """Ask the editor which findings to drop and merge; no decisions if it cannot say
+
+    Parameters
+    ----------
+    session_id : str
+        The review session, for noting an editor failure
+    aggregate_uri : str
+        The S3 URI of the aggregated findings the editor reads
+
+    Returns
+    -------
+    dict
+        The `drop` and `merge` keyword arguments for `publish_review`, or {} for none
+    """
     aggregate = read_s3_json(aggregate_uri)
     if not isinstance(aggregate, dict) or not aggregate.get("findings"):
         return {}
@@ -186,6 +276,15 @@ async def _edit(session_id: str, aggregate_uri: str) -> dict:
 
 
 async def _review(inputs: ReviewInputs, steps: _Steps) -> None:
+    """Run every step of a review, from reading the documents to publishing it
+
+    Parameters
+    ----------
+    inputs : ReviewInputs
+        The documents and options of the review
+    steps : _Steps
+        Runs and records each tool call
+    """
     sid = inputs.session_id
     documents = [(inputs.content_pdf_uri, inputs.content_pdf_name)] + [
         (uri, inputs.reference_names[i] if i < len(inputs.reference_names) else "")
@@ -213,7 +312,18 @@ async def _review(inputs: ReviewInputs, steps: _Steps) -> None:
     batch_uris = [b["s3_uri"] for b in batched["batches"]]
 
     async def claims(batch_uri: str) -> str:
-        """Extract and match one batch's claims; the matched URI, or "" if that failed"""
+        """Extract and match one batch's claims; the matched URI, or "" if that failed
+
+        Parameters
+        ----------
+        batch_uri : str
+            The S3 URI of the batch markdown
+
+        Returns
+        -------
+        str
+            The batch's matched-claims S3 URI, or "" without a library or on failure
+        """
         if not library_uri:
             return ""
         try:
@@ -235,7 +345,16 @@ async def _review(inputs: ReviewInputs, steps: _Steps) -> None:
         return matched["matched_claims_s3_uri"]
 
     async def reviews(batch_uri: str, matching: asyncio.Task) -> None:
-        # The generic reviewer reads no claims, so it starts while the batch is matched
+        """Run the reviewers on one batch once its claims are matched
+
+        Parameters
+        ----------
+        batch_uri : str
+            The S3 URI of the batch markdown
+        matching : asyncio.Task
+            The task matching the batch's claims, resolving to its matched-claims URI
+        """
+        # the generic reviewer reads no claims, so it starts while the batch is matched
         generic = asyncio.ensure_future(
             steps.run(run_generic_review, batch_md_s3_uri=batch_uri, session_id=sid)
         )
@@ -296,6 +415,18 @@ async def run_review(
 
     Raises the exception of a step the review cannot go on without (reading the
     content, batching it, aggregating or publishing the findings).
+
+    Parameters
+    ----------
+    inputs : ReviewInputs
+        The documents and options of the review
+    recorder : RunRecorder
+        The run record every tool call is written to
+
+    Returns
+    -------
+    AsyncIterator[dict]
+        The tool-call stream events, then a final `{"data": READY_TEXT}` event
     """
     steps = _Steps(recorder)
     review = asyncio.create_task(_review(inputs, steps))

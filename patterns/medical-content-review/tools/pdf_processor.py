@@ -42,13 +42,11 @@ OCR_MODEL_ID = os.environ.get(
 )
 MARKDOWN_PREFIX = "markdowns"
 
-# The model reads at most 2576 px on the long edge and 3.75 MP per image, and Bedrock
-# rejects images over 3.75 MB. Anything larger is downscaled until small print is lost.
+# model limits are 2576 px long edge, 3.75 MP and 3.75 MB; past them small print is lost
 MAX_IMAGE_EDGE = 2576
 MAX_IMAGE_PIXELS = 3_750_000
 MAX_IMAGE_BYTES = 3_750_000
-# Tall pages (emails, ISI banners) are cut top to bottom into tiles of about a portrait
-# page each, overlapping so a line cut at a boundary is whole in one of the two tiles
+# tall pages (emails, ISI banners) are cut into overlapping portrait-page-sized tiles
 TILE_ASPECT = 1.4
 TILE_OVERLAP = 0.08
 MAX_TILES = 20
@@ -68,13 +66,23 @@ class TruncatedTranscription(RuntimeError):
 
 OCR_SYSTEM = (Path(__file__).parent.parent / "prompts" / "pdf_ocr.txt").read_text()
 
-# Page transcriptions are reused across reviews of the same PDF, keyed by its content
-# and by everything that shapes a transcription, so a model, prompt or rendering change
-# starts a fresh cache instead of serving stale pages
+# page cache, keyed by PDF content and by every setting that shapes a transcription
 CACHE_PREFIX = f"{MARKDOWN_PREFIX}/cache"
 
 
 def _ocr_version(dpi: int) -> str:
+    """Short hash of every setting that shapes a page transcription
+
+    Parameters
+    ----------
+    dpi : int
+        Resolution pages are rasterized at
+
+    Returns
+    -------
+    str
+        12 hex characters naming the cache generation
+    """
     settings = (
         OCR_MODEL_ID,
         OCR_SYSTEM,
@@ -89,10 +97,22 @@ def _ocr_version(dpi: int) -> str:
 
 
 def _cached_page(key: str) -> str | None:
+    """A cached page transcription, or None when it is not cached
+
+    Parameters
+    ----------
+    key : str
+        Cache key of the page in the staging bucket
+
+    Returns
+    -------
+    str | None
+        The cached markdown, or None on a cache miss
+    """
     try:
         body = s3_client.get_object(Bucket=STAGING_BUCKET, Key=key)["Body"].read()
     except ClientError as e:
-        # Without an unconditional s3:ListBucket, S3 answers a missing key with 403
+        # without an unconditional s3:ListBucket, a missing key is answered with 403
         if is_not_found(e) or e.response.get("Error", {}).get("Code") in (
             "AccessDenied",
             "403",
@@ -115,7 +135,20 @@ def _sanitise_stem(name: str) -> str:
 
 
 def _text_layer(pdf_path: str, page_idx: int) -> str:
-    """Return the text embedded in one PDF page, or "" for an image-only page."""
+    """Return the text embedded in one PDF page, or "" for an image-only page.
+
+    Parameters
+    ----------
+    pdf_path : str
+        Local path of the PDF
+    page_idx : int
+        1-based page number
+
+    Returns
+    -------
+    str
+        The page's text layer with ligatures expanded, or "" when it has none
+    """
     result = subprocess.run(
         [
             "pdftotext",
@@ -143,6 +176,21 @@ def _render_dpi(pdf_path: str, page_idx: int, dpi: int) -> float:
     30-80 MP image, which `_fit` shrinks to 2576 px anyway after costing seconds and
     hundreds of MB.
     Only the width is capped, since tall pages are tiled top to bottom.
+
+    Parameters
+    ----------
+    pdf_path : str
+        Local path of the PDF
+    page_idx : int
+        1-based page number
+    dpi : int
+        Requested resolution
+
+    Returns
+    -------
+    float
+        The requested DPI, or a lower one that keeps the page within
+        :data:`MAX_IMAGE_EDGE` px wide
     """
     out = subprocess.run(
         ["pdfinfo", "-f", str(page_idx), "-l", str(page_idx), pdf_path],
@@ -161,6 +209,19 @@ def _render_dpi(pdf_path: str, page_idx: int, dpi: int) -> float:
 
 
 def _fit(image: Image.Image) -> Image.Image:
+    """Downscale an image to the size the model reads
+
+    Parameters
+    ----------
+    image : Image.Image
+        Page image or tile
+
+    Returns
+    -------
+    Image.Image
+        The image itself when it is within :data:`MAX_IMAGE_EDGE` and
+        :data:`MAX_IMAGE_PIXELS`, otherwise a resized copy
+    """
     width, height = image.size
     scale = min(
         1.0,
@@ -174,7 +235,18 @@ def _fit(image: Image.Image) -> Image.Image:
 
 
 def _tiles(image: Image.Image) -> list[Image.Image]:
-    """Cut a page image into model-sized tiles, top to bottom."""
+    """Cut a page image into model-sized tiles, top to bottom.
+
+    Parameters
+    ----------
+    image : Image.Image
+        Rendered page
+
+    Returns
+    -------
+    list[Image.Image]
+        At most :data:`MAX_TILES` overlapping tiles, each fitted with `_fit`
+    """
     width, height = image.size
     tile_height = int(width * TILE_ASPECT)
     if height <= tile_height * 1.15:
@@ -193,6 +265,19 @@ def _tiles(image: Image.Image) -> list[Image.Image]:
 
 
 def _jpeg(image: Image.Image) -> bytes:
+    """Encode an image as JPEG, lowering the quality until it fits Bedrock's limit
+
+    Parameters
+    ----------
+    image : Image.Image
+        Tile to encode
+
+    Returns
+    -------
+    bytes
+        The JPEG, at the highest quality tried that fits :data:`MAX_IMAGE_BYTES`
+        (the lowest quality tried when none does)
+    """
     for quality in (85, 75, 60):
         buf = BytesIO()
         image.convert("RGB").save(buf, format="JPEG", quality=quality)
@@ -202,6 +287,29 @@ def _jpeg(image: Image.Image) -> bytes:
 
 
 def _transcribe(page_idx: int, tiles: list[bytes], text_layer: str) -> str:
+    """Transcribe one page to markdown with the OCR model
+
+    Parameters
+    ----------
+    page_idx : int
+        1-based page number
+    tiles : list[bytes]
+        JPEG tiles of the page, top to bottom
+    text_layer : str
+        The page's embedded text, or "" when it has none
+
+    Returns
+    -------
+    str
+        The page as markdown
+
+    Raises
+    ------
+    TruncatedTranscription
+        When the reply was cut off at the output limit
+    RuntimeError
+        When the model returned no text
+    """
     intro = f"Page {page_idx}, as {len(tiles)} image(s) from top to bottom."
     if text_layer:
         intro += (
@@ -230,7 +338,23 @@ def _transcribe(page_idx: int, tiles: list[bytes], text_layer: str) -> str:
 
 
 def _ocr_single_page(pdf_path: str, page_idx: int, dpi: int) -> tuple[int, str, str]:
-    """OCR one PDF page. Returns (page_idx, markdown_text, failure reason or "")."""
+    """OCR one PDF page. Returns (page_idx, markdown_text, failure reason or "").
+
+    Parameters
+    ----------
+    pdf_path : str
+        Local path of the PDF
+    page_idx : int
+        1-based page number
+    dpi : int
+        Resolution at which the page is rasterized
+
+    Returns
+    -------
+    tuple[int, str, str]
+        The page number, its markdown (a note in place of the content when it could
+        not be transcribed), and the failure reason or "" on success
+    """
     try:
         text_layer = _text_layer(pdf_path, page_idx)
         image = convert_from_path(
@@ -239,7 +363,7 @@ def _ocr_single_page(pdf_path: str, page_idx: int, dpi: int) -> tuple[int, str, 
             first_page=page_idx,
             last_page=page_idx,
             thread_count=1,
-            # Reviewer comment boxes and sticky notes are drawn over the content
+            # reviewer comment boxes and sticky notes are drawn over the content
             hide_annotations=True,
         )[0]
         tiles = [_jpeg(t) for t in _tiles(image)]
@@ -319,6 +443,18 @@ def process_pdf(
         cache_dir = f"{CACHE_PREFIX}/{_ocr_version(dpi)}/{digest}"
 
         def page(page_idx: int) -> tuple[int, str, str]:
+            """Transcribe one page, reading and filling the page cache
+
+            Parameters
+            ----------
+            page_idx : int
+                1-based page number
+
+            Returns
+            -------
+            tuple[int, str, str]
+                As :func:`_ocr_single_page`
+            """
             cache_key = f"{cache_dir}/{page_idx}.md"
             cached = _cached_page(cache_key)
             if cached is not None:

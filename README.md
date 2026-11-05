@@ -59,6 +59,7 @@ See the [deployment guide](docs/DEPLOYMENT.md) for detailed instructions.
    - Findings on the same quote share one card, sorted by severity or by page. Each finding leads with a short headline and the kind of check that raised it, with the full issue, reference and source a click away; the words at issue are marked in the quote and highlighted more strongly in the PDF
    - Mandatory findings are shown by default. Faceted filters (type, severity, check, claim match, page) and a free-text search narrow both the findings and the claims; chips in one facet combine with OR and facets with AND, and each chip shows how many items it would keep. The severity tiles and claim-match counts are shortcuts to those filters
    - Mark a card as addressed to move it out of the open list while you work through the review (kept for the current review only)
+   - **Download Excel** fetches the readiness report, named after the reviewed document: a summary sheet (asset audience, match counts, claims per outcome, findings per check), a claims sheet with one row per claim — its outcome (approved wording, use approved wording, library claim not usable, approved for another audience, new claim), a recommendation, the matched library claim, the changed numbers, and the findings about it — and a findings sheet. It is written in code next to `review_results.json` as `reviews/{session_id}/readiness_report.xlsx`
 
 ### Pre-approved claims
 
@@ -102,7 +103,7 @@ The batcher decides once per document whether the asset is written for healthcar
 
 #### How each tag is decided
 
-The `exact` tags are decided in Python, never by a model, because `exact` is the one tag that lets a claim skip verification. A claim text and a library claim are compared after normalisation, then counted as the same claim when they use exactly the same words: `verbatim` when the word order also matches, `reordered` when it does not, since approved copy is routinely re-laid-out without changing the claim being made. A library entry that bundles several lines (a headline and its subline) also matches one line at a time, as `one line`.
+The `exact` tags are decided in Python, never by a model, because `exact` is the one tag that lets a claim skip verification. A claim text and a library claim are compared after normalization, then counted as the same claim when they use exactly the same words: `verbatim` when the word order also matches, `reordered` when it does not, since approved copy is routinely re-laid-out without changing the claim being made. A library entry that bundles several lines (a headline and its subline) also matches one line at a time, as `one line`.
 
 For a `partial` match, the claims report lists every number the content changed from the approved wording ("'1.8%' became '2.1%'"), and the matcher model gives a 0-100 similarity: a partial match below 50 (or below 75 when no number changed) is a `none`, which keeps loosely related claims from being reported as deviations.
 
@@ -166,7 +167,7 @@ response = client.invoke_agent_runtime(
 ```
 
 - `enabledSources` controls which public databases the external reviewer may call; omit it for the defaults, or pass `[]` to skip external evidence entirely
-- `contentPdfUri` (required) and `referenceUris` point at objects the agent reads, and the `*Name` fields only affect how files are labelled in the report
+- `contentPdfUri` (required) and `referenceUris` point at objects the agent reads, and the `*Name` fields only affect how files are labeled in the report
 - There is no `prompt`: the review steps are fixed in code, so every request runs the same pipeline
 - `claimsUri` turns on claim extraction and matching, exactly as uploading the spreadsheet in the UI does; `claimsName` is optional but recommended, since the parser picks its reader from the file extension
 - All inputs must live under the `uploads/` prefix of the stack's staging bucket (`s3://{staging_bucket}/uploads/...`): the runtime role is granted read access to that prefix only

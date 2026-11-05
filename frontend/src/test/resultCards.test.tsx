@@ -43,7 +43,7 @@ const issues: ReviewIssue[] = [
     ...base,
     page: 2,
     quote: "Excelent safety",
-    headline: "Misspelt 'Excelent'",
+    headline: "Misspelled 'Excelent'",
     type: "optional",
     score: 20,
     check: "editorial",
@@ -62,7 +62,7 @@ describe("result cards", () => {
     renderPanel();
     expect(screen.getByText("Superlative: 'Best'")).toBeTruthy();
     expect(screen.getByText("Unsupported claim")).toBeTruthy();
-    expect(screen.queryByText("Misspelt 'Excelent'")).toBeNull();
+    expect(screen.queryByText("Misspelled 'Excelent'")).toBeNull();
     expect(screen.getAllByText("Mark addressed")).toHaveLength(1);
     // the word at issue is marked in the quote
     expect(screen.getByText("Best", { selector: "mark" })).toBeTruthy();
@@ -84,11 +84,11 @@ describe("result cards", () => {
     renderPanel();
     fireEvent.click(screen.getByRole("button", { name: /Filters/ }));
     fireEvent.click(screen.getByRole("button", { name: /^Optional/ }));
-    expect(screen.getByText("Misspelt 'Excelent'")).toBeTruthy();
+    expect(screen.getByText("Misspelled 'Excelent'")).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Search findings"), {
       target: { value: "excelent" },
     });
     expect(screen.queryByText("Superlative: 'Best'")).toBeNull();
-    expect(screen.getByText("Misspelt 'Excelent'")).toBeTruthy();
+    expect(screen.getByText("Misspelled 'Excelent'")).toBeTruthy();
   });
 });

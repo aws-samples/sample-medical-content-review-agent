@@ -138,15 +138,15 @@ def stringify(value: object) -> str:
     return clean_text(str(value))
 
 
-# Excel's escape for a carriage return, which some exports write out literally
+# the escape Excel writes for a carriage return, which some exports write out literally
 _XML_CR = re.compile(r"_x000D_", re.IGNORECASE)
-# Only the tags rich-text exports emit, so a literal "<" in copy ("p<0.001") survives
+# only the tags rich-text exports emit, so a literal "<" in copy ("p<0.001") survives
 _HTML_TAG = re.compile(
     r"<!--.*?-->|</?(?:div|p|span|br|strong|b|em|i|u|ul|ol|li|sub|font|a)\b[^>]*>",
     re.IGNORECASE | re.DOTALL,
 )
 _HTML_BREAK = re.compile(r"<br\b[^>]*>|</(?:div|p|li)>", re.IGNORECASE)
-# Superscripts become the caret markers the plain claim text already uses ("^1*")
+# superscripts become the caret markers the plain claim text already uses ("^1*")
 _HTML_SUP = re.compile(r"<sup\b[^>]*>(.*?)</sup>", re.IGNORECASE | re.DOTALL)
 
 
@@ -367,8 +367,7 @@ def parse_xlsx(body: bytes) -> dict:
 
     workbook = load_workbook(io.BytesIO(body), read_only=True, data_only=True)
     result = parse_rows([])
-    # The export tool stamps the workbook's creation time, which is when the library
-    # was pulled; resaving the file later only changes the modified time
+    # the export time is the creation time; resaving later only changes modified time
     created = workbook.properties.created
     try:
         for sheet in workbook.worksheets:
@@ -442,8 +441,7 @@ def parse_claims_file(body: bytes, filename: str) -> dict:
             " `claim_text`, `claim`, `approved claim wording`) and one claim per row."
         )
 
-    # Carried on every claim so the matcher judges expiry on the day the library was
-    # exported, not on the day of the run
+    # so the matcher judges expiry on the library's export date, not the run date
     export_date = parsed.get("export_date", "")
     if export_date:
         for claim in parsed["claims"]:

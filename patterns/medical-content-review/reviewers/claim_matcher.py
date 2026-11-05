@@ -70,14 +70,12 @@ UNUSABLE_STATUSES = {
 PARTIAL_SCORE = 75
 UNUSABLE_SCORE = 85
 
-# The model's similarity (0-100) a partial match needs; below it the claim is `none`.
-# Worth tuning on a labelled test set.
+# model similarity (0-100) a partial match needs, else `none`; tune on a labeled set
 PARTIAL_MIN_SIMILARITY = 50
-# A partial match that changes no number needs more: wording-only near-misses were
-# the largest source of false positives, while number changes score as low as 65.
+# wording-only partials need more (top false-positive source); number changes ~65
 WORDING_PARTIAL_MIN_SIMILARITY = 75
 
-# Overrides the library's export date as the day expiry is judged on (ISO date)
+# overrides the library's export date as the day expiry is judged on (ISO date)
 AS_OF_ENV = "CLAIMS_AS_OF_DATE"
 
 
@@ -86,6 +84,17 @@ def _as_of_date(library_claim: dict) -> dt.date:
 
     Judging against today would make a rerun of the same asset give a different result
     once an approved claim's expiry date passes, so the export date is the default.
+
+    Parameters
+    ----------
+    library_claim : dict
+        A claim record produced by `load_claims_library`, which may carry the
+        library's export date in `library_as_of`
+
+    Returns
+    -------
+    datetime.date
+        The date set in :data:`AS_OF_ENV`, else the export date, else today
     """
     for value in (os.environ.get(AS_OF_ENV), library_claim.get("library_as_of")):
         try:
@@ -124,7 +133,20 @@ def _is_usable(library_claim: dict) -> tuple[bool, str]:
 
 
 def _audience_reason(library_claim: dict, audience: str) -> str:
-    """Say why a claim may not be used for the asset's audience, or "" when it may"""
+    """Say why a claim may not be used for the asset's audience, or "" when it may
+
+    Parameters
+    ----------
+    library_claim : dict
+        A claim record produced by `load_claims_library`
+    audience : str
+        The asset's audience ("hcp", "patient", or "" when unknown)
+
+    Returns
+    -------
+    str
+        The reason the claim is not approved for the audience, or "" when it is
+    """
     if approved_for(library_claim, audience):
         return ""
     return (
@@ -139,23 +161,78 @@ def _preferred(first: dict, second: dict, audience: str = "") -> dict:
     The export keeps old versions next to current ones, so the same words can sit on a
     Work in Progress row and on its Approved twin, or on a Physician row and on its
     Patient twin. Reporting the unusable one would flag approved copy as unusable.
+
+    Parameters
+    ----------
+    first : dict
+        The row kept so far
+    second : dict
+        Another row with the same wording
+    audience : str
+        The asset's audience ("hcp", "patient", or "" when unknown)
+
+    Returns
+    -------
+    dict
+        `second` when it ranks higher on usability, then audience approval, else
+        `first`
     """
 
     def rank(claim: dict) -> tuple[bool, bool]:
+        """Rank a row by whether it is usable, then approved for the audience
+
+        Parameters
+        ----------
+        claim : dict
+            A library row
+
+        Returns
+        -------
+        tuple[bool, bool]
+            `(usable, approved_for_audience)`, compared in that order
+        """
         return _is_usable(claim)[0], approved_for(claim, audience)
 
     return second if rank(second) > rank(first) else first
 
 
 def _text_similarity(text: str, approved: str) -> int:
-    """Score the word overlap of content and approved wording from 0 to 100"""
+    """Score the word overlap of content and approved wording from 0 to 100
+
+    Parameters
+    ----------
+    text : str
+        The content's wording
+    approved : str
+        The approved wording
+
+    Returns
+    -------
+    int
+        100 for the same words or one line of a multi-line entry, else the rounded
+        word-alignment ratio
+    """
     if same_wording(text, approved) or is_segment(text, approved):
         return 100
     return round(100 * aligned(text, approved).ratio())
 
 
 def _word_delta(text: str, approved: str) -> str:
-    """Describe in words what the content changed relative to the approved wording"""
+    """Describe in words what the content changed relative to the approved wording
+
+    Parameters
+    ----------
+    text : str
+        The content's wording
+    approved : str
+        The approved wording
+
+    Returns
+    -------
+    str
+        The replaced, dropped, and added words as one sentence, or a note that only
+        the layout differs
+    """
     matcher = aligned(text, approved)
     library, content = matcher.a, matcher.b
     changes: list[str] = []
@@ -173,7 +250,23 @@ def _word_delta(text: str, approved: str) -> str:
 
 
 def _change_headline(text: str, approved: str, claim_id: str) -> str:
-    """The first change from the approved wording, when it is short enough to headline"""
+    """The first change from the approved wording, when it is short enough to headline
+
+    Parameters
+    ----------
+    text : str
+        The content's wording
+    approved : str
+        The approved wording
+    claim_id : str
+        Id of the approved claim, named in the headline
+
+    Returns
+    -------
+    str
+        The first change with the claim id, or a generic headline when that change is
+        long or contains a number
+    """
     first = _word_delta(text, approved).split("; ")[0].rstrip(".")
     if (
         first.startswith("'")
@@ -182,7 +275,6 @@ def _change_headline(text: str, approved: str, claim_id: str) -> str:
     ):
         return f"{first} ({claim_id})"
     return f"Wording differs from {claim_id}"
-
 
 
 def _render_library(library: list[dict]) -> str:
@@ -241,7 +333,7 @@ def _exact_verdicts(
         `candidates`, for :func:`_settle_shared_lines` to choose from.
     """
     by_words: dict[tuple[str, ...], dict] = {}
-    # Each line of a multi-line entry, keyed like a whole claim, to the entries using it
+    # each line of a multi-line entry, keyed like a whole claim, to the entries using it
     by_segment: dict[tuple[str, ...], list[dict]] = {}
     for library_claim in library:
         text = normalise(library_claim.get("claim_text"))
@@ -306,6 +398,17 @@ def _prefer_closest_sibling(
     one for "FAST RELIEF THAT LASTS ALL NIGHT" while naming "lasts all night" as the
     change, so the sibling whose wording is closest wins, if it is usable or the
     model's pick is not. A sibling approved for another audience never wins.
+
+    Parameters
+    ----------
+    verdicts : list[dict]
+        Match verdicts, updated in place
+    claims : list[dict]
+        Extracted claim records of the batch
+    library_by_id : dict[str, dict]
+        Library claims keyed by `claim_id`
+    audience : str
+        The asset's audience ("hcp", "patient", or "" when unknown)
     """
     by_line: dict[tuple[str, ...], list[dict]] = {}
     for library_claim in library_by_id.values():
@@ -352,11 +455,32 @@ def _settle_shared_lines(
     to an entry another claim of the batch matched (a reworded headline is a partial
     match to its own entry), then to one approved for the asset's audience, then to a
     usable one.
+
+    Parameters
+    ----------
+    verdicts : list[dict]
+        Match verdicts, updated in place; their `candidates` are removed
+    claims : list[dict]
+        Extracted claim records of the batch
+    audience : str
+        The asset's audience ("hcp", "patient", or "" when unknown)
     """
     batch_keys = {wording_key(claim.get("text")) for claim in claims}
     matched = {str(v.get("matched_claim_id") or "") for v in verdicts} - {""}
 
     def coverage(library_claim: dict) -> float:
+        """Measure the share of an entry's lines that are claims in this batch
+
+        Parameters
+        ----------
+        library_claim : dict
+            A multi-line library entry
+
+        Returns
+        -------
+        float
+            Fraction of the entry's lines found in the batch, from 0 to 1
+        """
         parts = segments(library_claim.get("claim_text"))
         return sum(wording_key(p) in batch_keys for p in parts) / len(parts)
 
@@ -389,7 +513,18 @@ def _settle_shared_lines(
 
 
 def _score(value: object) -> int | None:
-    """Read a 0-100 score from a model verdict, or None when it gave none"""
+    """Read a 0-100 score from a model verdict, or None when it gave none
+
+    Parameters
+    ----------
+    value : object
+        The verdict's score as the model wrote it
+
+    Returns
+    -------
+    int | None
+        The score rounded and clamped to 0-100, or None when it is not a number
+    """
     try:
         return max(0, min(100, round(float(value))))
     except (TypeError, ValueError):
@@ -433,7 +568,7 @@ def _build_match_records(
         if ref:
             by_ref.setdefault(ref, verdict)
 
-    # The row each wording should be reported against when it appears more than once
+    # the row each wording should be reported against when it appears more than once
     twins: dict[tuple[str, ...], dict] = {}
     for library_claim in library_by_id.values():
         key = wording_key(library_claim.get("claim_text"))
@@ -547,9 +682,7 @@ def _build_match_records(
                     else ""
                 ),
                 "deviation": deviation,
-                # Semantic similarity judged by the model, and word overlap computed
-                # here, both 0-100 against the matched claim, or for `none` against the
-                # nearest library claim the model named
+                # model similarity and word overlap, 0-100, vs matched or nearest claim
                 "similarity": similarity,
                 "text_similarity": (
                     _text_similarity(claim["text"], compared.get("claim_text", ""))
@@ -721,7 +854,7 @@ def match_claims(
     """Match one batch's extracted claims against the pre-approved claims library.
 
     Tags every claim `exact` (`verbatim`, `reordered` or `segment`), `partial`, or
-    `none`, and writes two artefacts to S3: the tagged claim records (for the claims
+    `none`, and writes two artifacts to S3: the tagged claim records (for the claims
     report and the UI) and the findings that follow directly from the library —
     deviations from an approved wording, reuse of a claim the library no longer allows,
     and reuse of a claim approved for another audience. A claim the library does not
@@ -735,7 +868,7 @@ def match_claims(
     claims_library_s3_uri : str
         S3 URI returned by `load_claims_library`.
     session_id : str
-        Review session id, used to namespace claim artefacts.
+        Review session id, used to namespace claim artifacts.
 
     Returns
     -------
@@ -762,7 +895,7 @@ def match_claims(
     }
 
     audience = str(read_asset_audience(session_id).get("audience") or "")
-    # Partial candidates: only claims approved for the asset's audience
+    # partial candidates: only claims approved for the asset's audience
     candidates = [c for c in library_by_id.values() if approved_for(c, audience)]
 
     # Verbatim reuse is settled in Python; the model only judges paraphrases.

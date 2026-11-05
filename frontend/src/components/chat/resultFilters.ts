@@ -1,16 +1,15 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-// Facet filters for the results panel: chips within a facet combine with OR, facets
-// combine with AND, and a free-text search narrows both tabs further.
+// facet filters: OR within a facet, AND across facets; text search narrows both tabs
 
 export interface Facet<T> {
   id: string;
   label: string;
-  // The item's values for this facet; null or [] when the facet does not apply
+  // the item's values for this facet; null or [] when the facet does not apply
   values: (item: T) => string[] | null;
   valueLabels?: Record<string, string>;
-  // Display order of the values; values not listed follow, numerically then by name
+  // display order of the values; values not listed follow, numerically then by name
   order?: string[];
 }
 
@@ -40,7 +39,7 @@ export function toggleValue(
   return { ...state, selected: { ...state.selected, [facetId]: next } };
 }
 
-// Show only `value` in `facetId`, or clear that facet when it is already the only one
+// show only `value` in `facetId`, or clear that facet when it is already the only one
 export function selectOnly(
   state: FilterState,
   facetId: string,
@@ -105,8 +104,7 @@ function compareValues(order: string[] | undefined) {
   };
 }
 
-// Each facet's options, counted over the items that pass every other facet and the
-// search, so a count says how many items clicking the chip would add or keep
+// each facet's options, counted over items passing the other facets and the search
 export function facetOptions<T>(
   items: T[],
   facets: Facet<T>[],
@@ -142,8 +140,7 @@ export interface QuoteCard<T> {
   items: T[];
 }
 
-// Findings that share a quote_group (set by the backend for the same normalised quote)
-// go on one card, in the order their first finding appears
+// findings sharing a quote_group (same normalized quote) share a card, first-seen order
 export function groupByQuote<T extends { quote_group?: string }>(
   items: T[],
 ): QuoteCard<T>[] {
@@ -171,7 +168,7 @@ function bySeverity(a: Scored, b: Scored): number {
   return b.score - a.score || a.page - b.page;
 }
 
-// Worst finding first, then earliest page; the findings within a card the same way
+// worst finding first, then earliest page; the findings within a card the same way
 export function sortCardsBySeverity<T extends Scored>(
   cards: QuoteCard<T>[],
 ): QuoteCard<T>[] {

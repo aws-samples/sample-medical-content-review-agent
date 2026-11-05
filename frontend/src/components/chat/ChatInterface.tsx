@@ -217,8 +217,15 @@ function extractClaimsLibUrl(result: string): string | null {
   return match ? match[1] : null;
 }
 
+// extract the readiness report XLSX URL `publish_review` appends after the review URL
+function extractReportXlsxUrl(result: string): string | null {
+  const match = result.match(/\[REPORT_XLSX_URL:(https?:\/\/[^\]]+)\]/);
+  return match ? match[1] : null;
+}
+
 // Strip the URL tags we inject into tool results before showing them in the UI
-const URL_TAG_RE = /\n*\[(?:REVIEW|CLAIMS|CLAIMS_LIB)_URL:[^\]]+\]/g;
+const URL_TAG_RE =
+  /\n*\[(?:REVIEW|CLAIMS|CLAIMS_LIB|REPORT_XLSX)_URL:[^\]]+\]/g;
 
 // Fetch content from pre-signed S3 URL
 async function fetchUrl(url: string): Promise<string | null> {
@@ -320,6 +327,7 @@ export default function ChatInterface() {
   // Review results state
   const [reviewIssues, setReviewIssues] = useState<ReviewIssue[]>([]);
   const [claimsReport, setClaimsReport] = useState<ClaimsReport | null>(null);
+  const [reportXlsxUrl, setReportXlsxUrl] = useState<string | null>(null);
   // The parsed claims library, previewed beside the documents once it is loaded
   const [claimsLibrary, setClaimsLibrary] = useState<
     ClaimsLibraryEntry[] | null
@@ -507,6 +515,7 @@ export default function ChatInterface() {
     setPhaseStarted(runPhases.map(() => 0));
     setPhaseDone(runPhases.map(() => 0));
     setClaimsReport(null);
+    setReportXlsxUrl(null);
     // Keep a library that was already parsed at upload time — the agent reads the same
     // file and writes the same JSON, so there is nothing to re-fetch before showing it
     if (!claimsUri) setClaimsLibrary(null);
@@ -723,6 +732,8 @@ export default function ChatInterface() {
                 }
 
                 if (tc.name === "publish_review") {
+                  const xlsxUrl = extractReportXlsxUrl(tc.result || "");
+                  if (xlsxUrl) setReportXlsxUrl(xlsxUrl);
                   const reviewUrl = extractReviewUrl(tc.result || "");
                   if (reviewUrl) {
                     lastReviewUrlRef.current = reviewUrl;
@@ -858,6 +869,7 @@ export default function ChatInterface() {
     setIsLoading(false);
     setReviewIssues([]);
     setClaimsReport(null);
+    setReportXlsxUrl(null);
     setClaimsLibrary(null);
     setShowReviewPanel(false);
     setActivityLog([]);
@@ -1070,6 +1082,8 @@ export default function ChatInterface() {
           <ReviewResultsPanel
             issues={reviewIssues}
             claimsReport={claimsReport}
+            reportXlsxUrl={reportXlsxUrl}
+            documentName={documentFile?.name}
             isLoading={isLoading}
             activityLog={activityLog}
             phases={phases}

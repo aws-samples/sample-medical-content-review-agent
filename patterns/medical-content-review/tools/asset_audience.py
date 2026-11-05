@@ -12,7 +12,7 @@ from utils.s3 import STAGING_BUCKET, put_json, read_json, safe_session_id
 
 AUDIENCE_LABELS = {"hcp": "HCP", "patient": "patient or consumer"}
 
-# Library Audience values ("Physician, Nurse", "General Public, Patient") by asset audience
+# library Audience values ("Physician, Nurse", "General Public, Patient") by audience
 _TERMS = {
     "hcp": (
         "physician",
@@ -29,6 +29,18 @@ INTERNAL_TERM = "internal"
 
 
 def _key(session_dir: str) -> str:
+    """S3 key of the session's stored asset audience
+
+    Parameters
+    ----------
+    session_dir : str
+        Session id
+
+    Returns
+    -------
+    str
+        Key under the staging bucket
+    """
     return f"claims/{safe_session_id(session_dir)}/asset_audience.json"
 
 
@@ -38,6 +50,17 @@ def claim_audiences(value: object) -> set[str] | None:
     Returns None when the value names no audience this module knows (empty, or a label
     such as a channel), so the claim is not restricted. An Internal-only claim maps to
     the empty set: no asset may use it.
+
+    Parameters
+    ----------
+    value : object
+        The claim's Audience field, a comma-separated list of labels
+
+    Returns
+    -------
+    set[str] | None
+        Asset audiences (`hcp`, `patient`) the claim is approved for, or None when
+        the claim is not restricted
     """
     parts = [p.strip().lower() for p in str(value or "").split(",") if p.strip()]
     found = {
@@ -54,7 +77,20 @@ def claim_audiences(value: object) -> set[str] | None:
 
 
 def approved_for(library_claim: dict, asset_audience: str) -> bool:
-    """Whether a library claim may be used in an asset written for `asset_audience`"""
+    """Whether a library claim may be used in an asset written for `asset_audience`
+
+    Parameters
+    ----------
+    library_claim : dict
+        Library claim, with its `audience` field
+    asset_audience : str
+        Audience of the asset: `hcp`, `patient` or `""` when undecided
+
+    Returns
+    -------
+    bool
+        True when the claim is approved for the audience, or the audience is unknown
+    """
     if asset_audience not in AUDIENCE_LABELS:
         return True
     audiences = claim_audiences(library_claim.get("audience"))
@@ -62,12 +98,33 @@ def approved_for(library_claim: dict, asset_audience: str) -> bool:
 
 
 def write_asset_audience(session_dir: str, audience: str, reason: str) -> None:
-    """Store the asset's audience ("hcp", "patient" or "" when undecided) for the session"""
+    """Store the asset's audience ("hcp", "patient" or "" when undecided) for the session
+
+    Parameters
+    ----------
+    session_dir : str
+        Session id
+    audience : str
+        `hcp`, `patient` or `""` when undecided
+    reason : str
+        Why the batcher chose that audience
+    """
     put_json(_key(session_dir), {"audience": audience, "reason": reason})
 
 
 def read_asset_audience(session_id: str) -> dict:
-    """The stored `{"audience", "reason"}` for the session, or {} when none was stored"""
+    """The stored `{"audience", "reason"}` for the session, or {} when none was stored
+
+    Parameters
+    ----------
+    session_id : str
+        Session id
+
+    Returns
+    -------
+    dict
+        The stored audience and reason, or {} when none was stored
+    """
     if not STAGING_BUCKET:
         return {}
     data = read_json(_key(session_id))

@@ -19,7 +19,18 @@ REVIEWER_KINDS = ("generic", "external", "internal", "claims")
 
 
 def load_claim_records(session_id: str) -> list[dict]:
-    """The session's tagged claims, or [] when the run had no claims library"""
+    """The session's tagged claims, or [] when the run had no claims library
+
+    Parameters
+    ----------
+    session_id : str
+        The review session whose claims report is read
+
+    Returns
+    -------
+    list[dict]
+        The claim records of the session's claims report, or [] when there is none
+    """
     report = read_json(claims_report_key(session_id))
     claims = report.get("claims") if isinstance(report, dict) else report
     if not isinstance(claims, list):

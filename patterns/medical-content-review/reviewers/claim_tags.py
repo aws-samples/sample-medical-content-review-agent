@@ -18,12 +18,10 @@ from difflib import SequenceMatcher
 
 CLAIM_MATCH_STATUSES = ("exact", "partial", "none")
 
-# The `source` of the claim matcher's own findings, whose tags are the matcher's verdict
+# the `source` of the claim matcher's own findings, whose tags are the matcher's verdict
 CLAIMS_SOURCE = "Pre-approved claims library"
 
-# The kinds of exact match: approved copy reused as written, approved copy whose words
-# were rearranged, and one line of a library entry that bundles several statements
-# (a headline and its subline). All are approved wording, so all count as `exact`.
+# kinds of `exact` match: verbatim, reordered words, or one line of a bundled entry
 MATCH_PRECISIONS = ("verbatim", "reordered", "segment")
 
 # A quote and a claim are the same assertion above this similarity. Set low enough to
@@ -55,21 +53,17 @@ WORD_EQUIVALENTS = {
 # stick to the word it hangs off ("1.8%¹" against "1.8%") and break the match
 FOOTNOTE_MARKERS = "⁰¹²³⁴⁵⁶⁷⁸⁹"
 
-# Markers the claims export writes in plain text: a caret run ("HbA1c^1-5*") and HTML
-# superscripts. Their digits would otherwise survive as words ("hba1c 1 5").
+# export footnote markers, "HbA1c^1-5*" carets and <sup>, would leave digits as words
 CARET_MARKER_RE = re.compile(r"\^[0-9,\-–*†‡§¶#®]*")
 SUP_RE = re.compile(r"<sup>.*?</sup>", re.IGNORECASE | re.DOTALL)
 HTML_TAG_RE = re.compile(r"</?[a-z][^>]*>", re.IGNORECASE)
 
-# Layout notes in library entries ("[Headline]", "[Body copy]") describe placement, not
-# wording. A bracket opening with a digit or "~" ("[98%]", "[~9 of 10]") is copy, so it
-# is kept; a markdown link's text is kept too.
+# layout notes ("[Headline]") are dropped; "[98%]", "[~9 of 10]" and link text are copy
 LAYOUT_TAG_RE = re.compile(r"\[[A-Za-z][^\[\]]{0,80}\](?!\()")
 
 MIN_SEGMENT_WORDS = 3
 
-# Signs that qualify the number after them ("~9 of 10", "≥50 kg", "P<0.0001") or before
-# it ("10+ years"). Dropping one turns an approximate or bounded number into an exact one.
+# signs qualifying a number ("~9", "≥50", "P<0.0001"); dropping one makes it exact
 NUMBER_PREFIXES = {
     "~": "~",
     "∼": "~",
@@ -112,13 +106,13 @@ def segments(text: object) -> list[str]:
     Returns
     -------
     list[str]
-        Normalised lines of at least :data:`MIN_SEGMENT_WORDS` words; icon labels such
+        Normalized lines of at least :data:`MIN_SEGMENT_WORDS` words; icon labels such
         as "Fast" or "Safe" are too short to stand for a statement
     """
     lines: list[str] = []
     for line in strip_markup(text).splitlines():
         line = line.strip()
-        # A line opening in lower case continues a sentence the export wrapped
+        # a line opening in lower case continues a sentence the export wrapped
         if lines and line[:1].islower():
             lines[-1] += " " + line
         elif line:
@@ -145,7 +139,7 @@ def normalise(text: object) -> str:
         Footnote markup and layout tags are dropped first.
     """
     lowered = NUMBER_SUFFIX_RE.sub(r"\1+ ", strip_markup(text).lower())
-    # "[10]+ years" is "10+ years" with the number marked as a placeholder
+    # treat "[10]+ years" as "10+ years", the number marked as a placeholder
     lowered = re.sub(r"(\d)\]\+", r"\1+ ", lowered)
     cleaned = []
     for index, char in enumerate(lowered):
@@ -154,9 +148,11 @@ def normalise(text: object) -> str:
         elif char in NUMBER_PREFIXES and lowered[index + 1 :].lstrip()[:1].isdigit():
             # its own token start, so "P<0.0001" and "*P*<0.0001" split alike
             cleaned.append(" " + NUMBER_PREFIXES[char])
-        elif char == "+" and lowered[index - 1 : index].isdigit():
-            cleaned.append(char)
-        elif char.isalnum() or char == "%":
+        elif (
+            (char == "+" and lowered[index - 1 : index].isdigit())
+            or char.isalnum()
+            or char == "%"
+        ):
             cleaned.append(char)
         elif char == "&":
             # kept as a word of its own, to be spelled out below
@@ -218,7 +214,21 @@ def match_precision(quote: object, claim_text: object) -> str:
 
 
 def is_segment(quote: object, claim_text: object) -> bool:
-    """Say whether a quote is one line of a multi-line library entry, in any order"""
+    """Say whether a quote is one line of a multi-line library entry, in any order
+
+    Parameters
+    ----------
+    quote : object
+        The finding's or claim's wording
+    claim_text : object
+        Raw library claim text
+
+    Returns
+    -------
+    bool
+        True when the entry has several lines and the quote has the words of one of
+        them
+    """
     parts = segments(claim_text)
     key = wording_key(quote)
     return len(parts) > 1 and bool(key) and any(wording_key(p) == key for p in parts)
@@ -243,16 +253,16 @@ def same_wording(first: object, second: object) -> bool:
     return bool(key) and key == wording_key(second)
 
 
-# Spans covering more of a quote than this are the whole quote, not the words at issue
+# spans covering more of a quote than this are the whole quote, not the words at issue
 MAX_SPAN_SHARE = 0.6
 MAX_SPANS = 5
-# A longer run is an added passage, which bold type would not make easier to read
+# a longer run is an added passage, which bold type would not make easier to read
 MAX_SPAN_WORDS = 8
 HEADLINE_WORDS = 12
 
 
 def raw_spans(quote: object, runs: list[list[str]]) -> list[str]:
-    """Map runs of normalised words back to the quote's own text
+    """Map runs of normalized words back to the quote's own text
 
     Parameters
     ----------
@@ -288,10 +298,9 @@ def raw_spans(quote: object, runs: list[list[str]]) -> list[str]:
     return [text for _, text in sorted(found)]
 
 
-# A number as `normalise` leaves it ("84%", "~9", "10+", "<0.0001"), not a name that
-# contains digits ("17a", "23i")
+# a number as `normalise` leaves it ("84%", "~9", "<0.0001"), not a name ("17a", "23i")
 NUMBER_TOKEN_RE = re.compile(r"^[~≥≤<>]?\d+(?:[.,]\d+)*[%+]?$")
-# Longer replaced spans are rewordings, which the deviation describes
+# longer replaced spans are rewordings, which the deviation describes
 MAX_NUMERIC_SPAN = 3
 
 
@@ -299,6 +308,19 @@ def aligned(text: str, approved: str) -> SequenceMatcher:
     """Align the content's words with the closest line of the approved wording
 
     A bundled entry is compared line by line, so its other lines do not count as dropped.
+
+    Parameters
+    ----------
+    text : str
+        The content's wording
+    approved : str
+        The approved wording
+
+    Returns
+    -------
+    SequenceMatcher
+        An alignment of the closest approved line's words (a) with the content's (b),
+        both in `normalise` form
     """
     content = normalise(text).split()
     library = max(
@@ -313,6 +335,19 @@ def numeric_changes(text: str, approved: str) -> list[str]:
 
     Only replaced numbers count: a number the content drops or adds along with its
     words is a dropped or added qualifier, which the deviation already describes.
+
+    Parameters
+    ----------
+    text : str
+        The content's wording
+    approved : str
+        The approved wording
+
+    Returns
+    -------
+    list[str]
+        One "'was' became 'now'" description per replaced number, with its unit when
+        the word after it is unchanged
     """
     matcher = aligned(text, approved)
     library, content = matcher.a, matcher.b
@@ -375,7 +410,21 @@ def changed_spans(
 
 
 def quoted_spans(quote: object, spans: object) -> list[str]:
-    """Keep the spans a model named that are words of the quote, in the quote's text"""
+    """Keep the spans a model named that are words of the quote, in the quote's text
+
+    Parameters
+    ----------
+    quote : object
+        The finding's quote as written
+    spans : object
+        The `issue_spans` the model gave, expected to be a list of strings
+
+    Returns
+    -------
+    list[str]
+        Substrings of the quote, at most :data:`MAX_SPANS`; empty when the spans are
+        not a list or cover most of the quote
+    """
     if not isinstance(spans, list):
         return []
     runs = [normalise(span).split() for span in spans if isinstance(span, str)]
@@ -387,7 +436,19 @@ def quoted_spans(quote: object, spans: object) -> list[str]:
 
 
 def short_headline(text: object) -> str:
-    """The first sentence of a finding's issue, cut to a headline's length"""
+    """The first sentence of a finding's issue, cut to a headline's length
+
+    Parameters
+    ----------
+    text : object
+        A headline or issue text
+
+    Returns
+    -------
+    str
+        The first sentence without its period, or its first :data:`HEADLINE_WORDS`
+        words followed by an ellipsis
+    """
     sentence = re.split(r"(?<=[.!?])\s+", str(text or "").strip(), maxsplit=1)[0]
     words = sentence.split()
     if len(words) <= HEADLINE_WORDS:
@@ -396,7 +457,19 @@ def short_headline(text: object) -> str:
 
 
 def readable(findings: list[dict]) -> list[dict]:
-    """Give every finding a `headline` and `issue_spans` the quote holds"""
+    """Give every finding a `headline` and `issue_spans` the quote holds
+
+    Parameters
+    ----------
+    findings : list[dict]
+        Reviewer findings
+
+    Returns
+    -------
+    list[dict]
+        Copies of the findings with a short `headline` and the `issue_spans` found in
+        their quote
+    """
     out = []
     for finding in findings:
         finding = dict(finding)
@@ -545,14 +618,13 @@ def tag_findings(findings: list[dict], claims: list[dict]) -> list[dict]:
         status = str(finding.get("claim_match") or "").strip().lower()
         claim_id = str(finding.get("claim_id") or "")
         precision = str(finding.get("claim_precision") or "")
-        # A finding without a quote (an asset-level one) has nothing to match on
+        # a finding without a quote (an asset-level one) has nothing to match on
         known = status in CLAIM_MATCH_STATUSES and (
             finding.get("source") == CLAIMS_SOURCE
             or not normalise(finding.get("quote"))
         )
 
-        # An exact match without its kind is also incomplete: a reviewer may have
-        # carried the status through and dropped the qualifier.
+        # an exact match without its kind is incomplete: a reviewer may have dropped it
         if not known or (status == "exact" and not precision):
             claim = best_claim(finding, pairs) or {}
             if not known:

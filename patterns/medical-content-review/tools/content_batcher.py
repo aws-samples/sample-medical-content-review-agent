@@ -37,8 +37,7 @@ PAGE_PATTERN = re.compile(r"\[page (\d+)\]\n(.*?)\n\[/page \1\]", re.DOTALL)
 AUDIENCE_RE = re.compile(r"<audience>\s*(hcp|patient)\s*</audience>", re.IGNORECASE)
 AUDIENCE_REASON_RE = re.compile(r"<audience_reason>(.*?)</audience_reason>", re.DOTALL)
 
-# A layout indicator page repeats, possibly out of date, the copy of the other pages and
-# says it is not for content review, so no reviewer gets to see its content
+# a layout indicator page repeats (maybe stale) copy and is not for review: hide it
 LAYOUT_NOTICE_RE = re.compile(r"not\s+intended\s+for\s+content\s+review", re.IGNORECASE)
 LAYOUT_STUB = "(layout indicator, not for content review)"
 
@@ -111,7 +110,7 @@ def batch_content(markdown_s3_uri: str, session_id: str = "") -> str:
         system=[{"text": SYSTEM}],
         inferenceConfig={"maxTokens": 2048, **sampling_params(MODEL_ID, 0.0)},
     )
-    # Models that think first return a reasoning block before the text
+    # models that think first return a reasoning block before the text
     blocks = response["output"]["message"]["content"]
     raw = "\n".join(b["text"] for b in blocks if "text" in b)
     batch_page_lists: list[list[int]] = ast.literal_eval(_parse_tagged(raw, "chunks"))
@@ -159,7 +158,7 @@ def batch_content(markdown_s3_uri: str, session_id: str = "") -> str:
                 severity="warning",
             )
 
-    # Batches sit next to their source markdown, which is already namespaced by session
+    # batches sit next to their source markdown, which is already namespaced by session
     source = PurePosixPath(key)
     written: list[dict] = []
     for i, page_nums in enumerate(batch_page_lists, start=1):
