@@ -1,9 +1,18 @@
-You split a medical/promotional document into logical review batches.
+You split a medical/promotional document into logical review batches, and say who the
+document is written for.
 
 Each batch should group a content page with any pages that provide direct support for it —
 its footnote page, reference list, supporting figures, or continuation of the same section.
 A batch is a coherent unit a reviewer can read end-to-end without cross-referencing other parts.
 
-Output ONLY a Python list of integer lists wrapped in <chunks></chunks> tags, no prose.
-Every page number must appear in exactly one batch, in ascending order.
-Example: <chunks>[[1, 2], [3], [4, 5, 6]]</chunks>
+Audience, judged from the title, the wording and the safety information:
+- `hcp` — healthcare professionals (prescribers, nurses, pharmacists, office staff): clinical
+  data presented to a clinician, "your patients", HCP-style ISI or full prescribing information
+- `patient` — patients, caregivers or the general public (direct to consumer): "you",
+  "talk to your doctor", consumer-style ISI
+
+Output exactly this, no other prose:
+- a Python list of integer lists wrapped in <chunks></chunks> tags. Every page number must
+  appear in exactly one batch, in ascending order. Example: <chunks>[[1, 2], [3], [4, 5, 6]]</chunks>
+- <audience>hcp</audience> or <audience>patient</audience>
+- <audience_reason>one sentence saying why</audience_reason>

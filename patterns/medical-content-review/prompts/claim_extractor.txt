@@ -13,17 +13,61 @@ Extract a claim when the text:
 - Makes a comparison (versus placebo, versus another product, versus baseline)
 - Asserts a superlative or an absolute ("no interactions", "suitable for all patients")
 
+Headlines, subheads, taglines, callouts and calls to action are NOT excluded for being
+headings. Assess each one: extract it when it asserts something about the product
+("Fast relief that lasts all day"), and keep a headline and its subline as separate
+claims. A headline set over several lines or several headings ("# FAST RELIEF" followed
+by "# THAT LASTS ALL DAY") is ONE claim.
+
+A result is ONE claim together with its data. The data points of a result are part of
+that claim, never claims of their own:
+- a lead-in and the bullets that complete it ("Response rates at Week 16 were:" followed
+  by one bullet per treatment arm) are one claim
+- a chart is one claim: its title or the statement it illustrates, with its bars, values,
+  sample sizes and timepoint ("84% had no disease progression at 2 years" with its bar
+  label "300 mg (n=139)")
+- a table is one claim: its title with its column headers and rows
+A list of separate benefits is still one claim per benefit.
+
+`[Figure: ...]` blocks describe an image. The text they quote from the image (chart
+values and labels, callouts, captions) is the asset's copy: extract it like any other
+copy, as part of the result it belongs to. The description's own prose ("a woman
+running on a beach", "an observer would conclude ...") is not copy and is never a claim. Do not
+extract a claim from a figure that repeats a claim already taken from the page's text.
+
+Footnotes (the lines after a symbol or number, usually at the foot of the page) are copy
+too. A footnote IS a claim, extracted on its own without its leading symbol, when it:
+- states a result: "§77% of treatment-naive patients reached remission at Year 4 with
+  Neuroxalyn (n=104).¹" is the claim "77% of treatment-naive patients reached remission
+  at Year 4 with Neuroxalyn (n=104).¹"
+- says what a claim's efficacy or safety rests on, or which patients or indications it
+  covers: "*The effectiveness and safety of the Neuroxalyn IV formulation are based on
+  the pharmacokinetic exposure and extrapolation of the established effectiveness and
+  safety of subcutaneous Neuroxalyn in adult patients.¹"
+A footnote that only cites a source, dates a claim ("*As of January 2025"), defines terms
+or abbreviations, lists an end point's criteria, describes study methods ("Results were
+analyzed using nonresponder imputation"), or states a limitation ("No clinical or
+statistical conclusions can be drawn", "Real-world analyses can only evaluate
+association, not causation") is NOT a claim; the same goes for such notes in the body copy.
+
 Do NOT extract:
-- Headings and navigation text that assert nothing (e.g. "Key Benefits:", "Page 2")
-- Footnote citations and reference lists on their own (they support claims, they are not claims)
+- Structural labels and navigation text that assert nothing (e.g. "Key Benefits:", "Page 2",
+  "Study design", "Learn more")
+- Reference lists and the footnotes above that are not claims (they support claims)
 - Patient testimonials quoted as opinion, unless they assert a clinical outcome
 - Boilerplate such as company names, addresses, legal disclaimers, and job codes
+- The Important Safety Information (ISI) block, the Indications / Indication and Usage
+  block, and prescribing-information boilerplate, including the parts about other
+  indications. Body copy outside those blocks that mentions an indication IS extracted
+  ("For appropriate adult patients with moderate to severe disease").
+- Notes to the MLR reviewer about interactive elements or layout, which are not shown to
+  the audience: "GLOBAL: links to ...", "Links to: https://...", "Click here to open".
 
 Rules:
 - Quote the claim EXACTLY as it appears in the markdown, including its numbers. Do not
-  paraphrase, merge, split, correct, or complete it. Chart labels count: if a figure shows
-  "5.8 Neuroxalyn / 0.8 Placebo", the claim is the text as written.
-- One claim per statement. A bullet list of four benefits is four claims.
+  paraphrase, correct, or complete it. When a claim spans several lines, headings, bullets
+  or chart labels, copy each piece exactly and join the pieces in document order with a
+  single space, leaving out the markdown list and heading markers.
 - Record the page number from the enclosing `[page N]` tag.
 - Keep the document's own order.
 

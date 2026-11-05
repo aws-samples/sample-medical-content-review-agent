@@ -18,9 +18,13 @@ from difflib import SequenceMatcher
 
 CLAIM_MATCH_STATUSES = ("exact", "partial", "none")
 
-# The two kinds of exact match: approved copy reused as written, and approved copy whose
-# words were rearranged. Both are the same approved claim, so both count as `exact`.
-MATCH_PRECISIONS = ("verbatim", "reordered")
+# The `source` of the claim matcher's own findings, whose tags are the matcher's verdict
+CLAIMS_SOURCE = "Pre-approved claims library"
+
+# The kinds of exact match: approved copy reused as written, approved copy whose words
+# were rearranged, and one line of a library entry that bundles several statements
+# (a headline and its subline). All are approved wording, so all count as `exact`.
+MATCH_PRECISIONS = ("verbatim", "reordered", "segment")
 
 # A quote and a claim are the same assertion above this similarity. Set low enough to
 # survive typos and truncated quotes, high enough that two different claims on one page
@@ -51,6 +55,77 @@ WORD_EQUIVALENTS = {
 # stick to the word it hangs off ("1.8%¹" against "1.8%") and break the match
 FOOTNOTE_MARKERS = "⁰¹²³⁴⁵⁶⁷⁸⁹"
 
+# Markers the claims export writes in plain text: a caret run ("HbA1c^1-5*") and HTML
+# superscripts. Their digits would otherwise survive as words ("hba1c 1 5").
+CARET_MARKER_RE = re.compile(r"\^[0-9,\-–*†‡§¶#®]*")
+SUP_RE = re.compile(r"<sup>.*?</sup>", re.IGNORECASE | re.DOTALL)
+HTML_TAG_RE = re.compile(r"</?[a-z][^>]*>", re.IGNORECASE)
+
+# Layout notes in library entries ("[Headline]", "[Body copy]") describe placement, not
+# wording. A bracket opening with a digit or "~" ("[98%]", "[~9 of 10]") is copy, so it
+# is kept; a markdown link's text is kept too.
+LAYOUT_TAG_RE = re.compile(r"\[[A-Za-z][^\[\]]{0,80}\](?!\()")
+
+MIN_SEGMENT_WORDS = 3
+
+# Signs that qualify the number after them ("~9 of 10", "≥50 kg", "P<0.0001") or before
+# it ("10+ years"). Dropping one turns an approximate or bounded number into an exact one.
+NUMBER_PREFIXES = {
+    "~": "~",
+    "∼": "~",
+    "～": "~",
+    "≥": "≥",
+    "≤": "≤",
+    "<": "<",
+    ">": ">",
+}
+NUMBER_SUFFIX_RE = re.compile(r"(\d) *\+")
+
+
+def strip_markup(text: object) -> str:
+    """Remove footnote markup and layout notes, keeping line breaks
+
+    Parameters
+    ----------
+    text : object
+        Raw quote or claim text
+
+    Returns
+    -------
+    str
+        The text without caret markers, `<sup>` markers, HTML tags, or layout tags
+    """
+    cleaned = SUP_RE.sub("", str(text))
+    cleaned = HTML_TAG_RE.sub(" ", cleaned)
+    cleaned = CARET_MARKER_RE.sub("", cleaned)
+    return LAYOUT_TAG_RE.sub(" ", cleaned)
+
+
+def segments(text: object) -> list[str]:
+    """Split a library entry into its separately laid-out statements
+
+    Parameters
+    ----------
+    text : object
+        Raw library claim text
+
+    Returns
+    -------
+    list[str]
+        Normalised lines of at least :data:`MIN_SEGMENT_WORDS` words; icon labels such
+        as "Fast" or "Safe" are too short to stand for a statement
+    """
+    lines: list[str] = []
+    for line in strip_markup(text).splitlines():
+        line = line.strip()
+        # A line opening in lower case continues a sentence the export wrapped
+        if lines and line[:1].islower():
+            lines[-1] += " " + line
+        elif line:
+            lines.append(line)
+    parts = (normalise(line) for line in lines)
+    return [part for part in parts if len(part.split()) >= MIN_SEGMENT_WORDS]
+
 
 def normalise(text: object) -> str:
     """Reduce a quote or claim to a comparable form
@@ -66,13 +141,21 @@ def normalise(text: object) -> str:
         Lower-cased text with punctuation and repeated whitespace collapsed, and
         shorthand spelled out. `%` and decimal points survive, because "1.8%" and "18%"
         are different claims, but a sentence-ending period does not: it is formatting,
-        not content.
+        not content. So do the signs in :data:`NUMBER_PREFIXES` and a `+` after a number.
+        Footnote markup and layout tags are dropped first.
     """
-    lowered = str(text).lower()
+    lowered = NUMBER_SUFFIX_RE.sub(r"\1+ ", strip_markup(text).lower())
+    # "[10]+ years" is "10+ years" with the number marked as a placeholder
+    lowered = re.sub(r"(\d)\]\+", r"\1+ ", lowered)
     cleaned = []
     for index, char in enumerate(lowered):
         if char in FOOTNOTE_MARKERS:
             cleaned.append("")
+        elif char in NUMBER_PREFIXES and lowered[index + 1 :].lstrip()[:1].isdigit():
+            # its own token start, so "P<0.0001" and "*P*<0.0001" split alike
+            cleaned.append(" " + NUMBER_PREFIXES[char])
+        elif char == "+" and lowered[index - 1 : index].isdigit():
+            cleaned.append(char)
         elif char.isalnum() or char == "%":
             cleaned.append(char)
         elif char == "&":
@@ -83,9 +166,8 @@ def normalise(text: object) -> str:
             cleaned.append(char if lowered[index + 1 : index + 2].isdigit() else " ")
         else:
             cleaned.append(" ")
-    return " ".join(
-        WORD_EQUIVALENTS.get(word, word) for word in "".join(cleaned).split()
-    )
+    joined = re.sub(r"([~≥≤<>]) +(?=\d)", r"\1", "".join(cleaned))
+    return " ".join(WORD_EQUIVALENTS.get(word, word) for word in joined.split())
 
 
 def wording_key(text: object) -> tuple[str, ...]:
@@ -125,11 +207,21 @@ def match_precision(quote: object, claim_text: object) -> str:
     Returns
     -------
     str
-        `"verbatim"`, `"reordered"`, or `""` when the two are not the same words
+        `"verbatim"`, `"reordered"`, `"segment"` when the quote is one line of a
+        multi-line entry, or `""` when the two are not the same words
     """
     if normalise(quote) == normalise(claim_text) and normalise(quote):
         return "verbatim"
-    return "reordered" if same_wording(quote, claim_text) else ""
+    if same_wording(quote, claim_text):
+        return "reordered"
+    return "segment" if is_segment(quote, claim_text) else ""
+
+
+def is_segment(quote: object, claim_text: object) -> bool:
+    """Say whether a quote is one line of a multi-line library entry, in any order"""
+    parts = segments(claim_text)
+    key = wording_key(quote)
+    return len(parts) > 1 and bool(key) and any(wording_key(p) == key for p in parts)
 
 
 def same_wording(first: object, second: object) -> bool:
@@ -149,6 +241,56 @@ def same_wording(first: object, second: object) -> bool:
     """
     key = wording_key(first)
     return bool(key) and key == wording_key(second)
+
+
+# A number as `normalise` leaves it ("84%", "~9", "10+", "<0.0001"), not a name that
+# contains digits ("17a", "23i")
+NUMBER_TOKEN_RE = re.compile(r"^[~≥≤<>]?\d+(?:[.,]\d+)*[%+]?$")
+# Longer replaced spans are rewordings, which the deviation describes
+MAX_NUMERIC_SPAN = 3
+
+
+def aligned(text: str, approved: str) -> SequenceMatcher:
+    """Align the content's words with the closest line of the approved wording
+
+    A bundled entry is compared line by line, so its other lines do not count as dropped.
+    """
+    content = normalise(text).split()
+    library = max(
+        (part.split() for part in segments(approved) or [normalise(approved)]),
+        key=lambda words: SequenceMatcher(None, words, content).ratio(),
+    )
+    return SequenceMatcher(None, library, content, autojunk=False)
+
+
+def numeric_changes(text: str, approved: str) -> list[str]:
+    """List the numbers the content changed, as "'2 years' became '3 years'"
+
+    Only replaced numbers count: a number the content drops or adds along with its
+    words is a dropped or added qualifier, which the deviation already describes.
+    """
+    matcher = aligned(text, approved)
+    library, content = matcher.a, matcher.b
+    changes: list[str] = []
+    for op, i1, i2, j1, j2 in matcher.get_opcodes():
+        was, now = library[i1:i2], content[j1:j2]
+        numbers_was = [w for w in was if NUMBER_TOKEN_RE.match(w)]
+        numbers_now = [w for w in now if NUMBER_TOKEN_RE.match(w)]
+        if (
+            op == "replace"
+            and max(len(was), len(now)) <= MAX_NUMERIC_SPAN
+            and numbers_was
+            and numbers_now
+            and numbers_was != numbers_now
+        ):
+            # the unchanged word after the number says what it counts ("years")
+            unit = (
+                library[i2 : i2 + 1] if i2 < len(library) and j2 < len(content) else []
+            )
+            if unit and content[j2] != unit[0]:
+                unit = []
+            changes.append(f"'{' '.join(was + unit)}' became '{' '.join(now + unit)}'")
+    return changes
 
 
 def _coverage(short: list[str], long: list[str]) -> float:
@@ -204,7 +346,7 @@ def _similarity(quote: str, claim_text: str) -> float:
     return max(_coverage(short, long), SequenceMatcher(None, quote, claim_text).ratio())
 
 
-def _best_claim(finding: dict, claims: list[tuple[dict, str]]) -> dict | None:
+def best_claim(finding: dict, claims: list[tuple[dict, str]]) -> dict | None:
     """Find the claim a finding is about, preferring claims on the same page
 
     A claim quoted as it was extracted wins outright, before any fuzzy scoring: two
@@ -254,11 +396,12 @@ def _best_claim(finding: dict, claims: list[tuple[dict, str]]) -> dict | None:
 def tag_findings(findings: list[dict], claims: list[dict]) -> list[dict]:
     """Give every finding a claim match tag
 
-    A finding that already carries a valid `claim_match` (those the claim matcher
-    produced) is left alone. Any other finding is matched against the tagged claims by
-    its quote and inherits that claim's status. A finding whose quote is not one of the
-    extracted claims is tagged `none`, which is what the library says about it: the
-    text is not covered by an approved claim. `none` is not a violation.
+    A finding the claim matcher produced keeps its tag. Any other finding is matched
+    against the tagged claims by its quote and inherits that claim's status, whatever
+    tag the reviewer gave it: a reviewer guessing "none" for approved copy would
+    otherwise send approved wording back for substantiation. A finding whose quote is
+    not one of the extracted claims is tagged `none`, which is what the library says
+    about it: the text is not covered by an approved claim. `none` is not a violation.
 
     Parameters
     ----------
@@ -282,12 +425,16 @@ def tag_findings(findings: list[dict], claims: list[dict]) -> list[dict]:
         status = str(finding.get("claim_match") or "").strip().lower()
         claim_id = str(finding.get("claim_id") or "")
         precision = str(finding.get("claim_precision") or "")
-        known = status in CLAIM_MATCH_STATUSES
+        # A finding without a quote (an asset-level one) has nothing to match on
+        known = status in CLAIM_MATCH_STATUSES and (
+            finding.get("source") == CLAIMS_SOURCE
+            or not normalise(finding.get("quote"))
+        )
 
         # An exact match without its kind is also incomplete: a reviewer may have
         # carried the status through and dropped the qualifier.
         if not known or (status == "exact" and not precision):
-            claim = _best_claim(finding, pairs) or {}
+            claim = best_claim(finding, pairs) or {}
             if not known:
                 status = str(claim.get("match_status") or "none")
                 claim_id = str(claim.get("matched_claim_id") or "")

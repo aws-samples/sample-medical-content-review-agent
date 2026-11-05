@@ -72,9 +72,9 @@ Only a claim text column is required; everything else is optional metadata. Head
 | status         | `status`, `approval_status`, `state`                                                     | a match against `withdrawn`/`expired`/`superseded`/`draft` is an issue  |
 | approved date  | `approved_date`, `approval_date`, `date_approved`                                        | shown in the claims table                                               |
 | expiry date    | `expiry_date`, `expiration_date`, `valid_until`, `review_by`                             | flags a match against a lapsed claim                                    |
-| reference      | `primary_reference`, `reference`, `substantiation`, `evidence`, `support`                | quoted back in the claims report                                        |
+| reference      | `primary_reference`, `reference`, `substantiation`, `evidence`, `support`, `references`  | quoted back in the claims report                                        |
 | source         | `source_document`, `source`, `document`, `reference_document`                            | shown in the claims table                                               |
-| audience       | `audience`, `target_audience`, `channel`, `channels`                                     | shown in the claims table                                               |
+| audience       | `audience`, `target_audience`, `channel`, `channels`                                     | limits which assets may use the claim (HCP or patient), see below       |
 | restrictions   | `usage_restrictions`, `restrictions`, `conditions`, `notes`, `comments`                  | quoted back in the claims report                                        |
 | job code       | `mlr_job_code`, `job_code`, `approval_code`                                              | shown in the claims table                                               |
 
@@ -86,12 +86,21 @@ The matcher tags every extracted claim:
 | ------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------- |
 | `exact` · verbatim  | the approved wording, reused as written        | no further substantiation needed                                                   |
 | `exact` · reordered | the approved wording with its words rearranged | no further substantiation needed; the rearrangement is noted in the claims report  |
+| `exact` · one line  | one line of an entry that bundles several      | no further substantiation needed; the entry's lines missing from the batch are noted |
 | `partial`           | the same assertion, different wording          | mandatory finding quoting the approved wording, for a human to confirm             |
 | `none`              | the library does not cover this assertion      | not a violation — routed to the reference and external-evidence reviewers as usual |
 
+Rich-text cells (HTML from a rich-text export field, literal `_x000D_` escapes) are turned into plain text with one line per paragraph, and superscripts become the caret footnote markers the matcher ignores. An `.xlsx` export's creation date is kept on every claim, and expiry is judged on that date (or on `CLAIMS_AS_OF_DATE` when set) rather than on the day of the run, so rerunning a review gives the same result.
+
+#### Audience
+
+The batcher decides once per document whether the asset is written for healthcare professionals (`hcp`) or patients and consumers (`patient`), and the claims tab shows that decision. A library claim's `audience` column (`Physician, Nurse`, `General Public, Patient`, …) is a usage restriction: a partial match may only name a claim approved for the asset's audience, and reusing the exact wording of a claim approved for another audience is reported as a mandatory finding. Where the library holds the same wording on several rows — an old version next to its approved one, or an HCP row next to its patient twin — the match is reported against the usable row for the asset's audience.
+
 #### How each tag is decided
 
-The two `exact` tags are decided in Python, never by a model, because `exact` is the one tag that lets a claim skip verification. A claim text and a library claim are compared after normalisation, then counted as the same claim when they use exactly the same words: `verbatim` when the word order also matches, `reordered` when it does not, since approved copy is routinely re-laid-out without changing the claim being made.
+The `exact` tags are decided in Python, never by a model, because `exact` is the one tag that lets a claim skip verification. A claim text and a library claim are compared after normalisation, then counted as the same claim when they use exactly the same words: `verbatim` when the word order also matches, `reordered` when it does not, since approved copy is routinely re-laid-out without changing the claim being made. A library entry that bundles several lines (a headline and its subline) also matches one line at a time, as `one line`.
+
+For a `partial` match, the claims report lists every number the content changed from the approved wording ("'1.8%' became '2.1%'"), and the matcher model gives a 0-100 similarity: a partial match below 50 (or below 75 when no number changed) is a `none`, which keeps loosely related claims from being reported as deviations.
 
 Normalisation is deliberately limited to typography, so everything that could change what is being claimed still reaches a reviewer:
 

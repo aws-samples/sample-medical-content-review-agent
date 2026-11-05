@@ -5,6 +5,7 @@
 import json
 
 from strands import tool
+from tools.asset_audience import read_asset_audience
 from utils.s3 import (
     STAGING_BUCKET,
     list_keys,
@@ -70,6 +71,7 @@ def get_claims(session_id: str) -> str:
             counts[status] += 1
 
     report = {
+        "asset_audience": read_asset_audience(session_id),
         "total_claims": len(claims),
         "counts": counts,
         "requires_verification": sum(

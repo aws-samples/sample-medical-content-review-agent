@@ -207,7 +207,9 @@ async def _review(inputs: ReviewInputs, steps: _Steps) -> None:
     content_md, reference_mds = read[0], read[1 : len(documents)]
     library_uri = _reply(read[-1])["claims_s3_uri"] if inputs.claims_uri else ""
 
-    batched = _reply(await steps.run(batch_content, markdown_s3_uri=content_md))
+    batched = _reply(
+        await steps.run(batch_content, markdown_s3_uri=content_md, session_id=sid)
+    )
     batch_uris = [b["s3_uri"] for b in batched["batches"]]
 
     async def claims(batch_uri: str) -> str:
