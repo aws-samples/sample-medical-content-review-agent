@@ -2,8 +2,27 @@
 // SPDX-License-Identifier: MIT-0
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import type { QuoteTarget } from "./PdfQuoteViewer";
+
+// pdf.js is large, so the viewer loads only once a PDF is shown
+const PdfQuoteViewer = lazy(() => import("./PdfQuoteViewer"));
+
+// Every PDF in the app is shown in this viewer, with zoom and the hand tool; a target
+// highlights a quote on a page and zooms to it
+export function PdfPane({
+  url,
+  target = null,
+}: {
+  url: string;
+  target?: QuoteTarget | null;
+}) {
+  return (
+    <Suspense fallback={<p className="text-gray-400 p-4">Loading viewer…</p>}>
+      <PdfQuoteViewer key={url} url={url} target={target} />
+    </Suspense>
+  );
+}
 
 export interface ReviewIssue {
   page: number;
@@ -430,7 +449,14 @@ export function ClaimsLibraryPreview({
 // The claim-match results, rendered as one of the two tabs of the right-hand panel.
 // Matching and issues are read one at a time, so they share the panel instead of
 // pushing the document preview further down the page.
-function ClaimsMatchingTab({ claimsReport }: { claimsReport: ClaimsReport }) {
+function ClaimsMatchingTab({
+  claimsReport,
+  onSelectClaim,
+}: {
+  claimsReport: ClaimsReport;
+  // Shows the claim highlighted in the content document
+  onSelectClaim: (claim: ClaimMatch) => void;
+}) {
   const audience = claimsReport.asset_audience?.audience;
   const counts: {
     value: number;
@@ -492,7 +518,8 @@ function ClaimsMatchingTab({ claimsReport }: { claimsReport: ClaimsReport }) {
         {claimsReport.claims.map((claim) => (
           <div
             key={claim.claim_ref}
-            className="border border-gray-200 rounded-lg px-3 py-2"
+            className="border border-gray-200 rounded-lg px-3 py-2 cursor-pointer hover:shadow-md transition-all"
+            onClick={() => onSelectClaim(claim)}
           >
             <div className="flex items-center gap-2 mb-1.5 flex-wrap">
               <span className="text-[10px] font-bold bg-gray-800 text-white px-2 py-0.5 rounded-full">
@@ -643,8 +670,8 @@ export function ReviewResultsPanel({
   previewDocs,
   onNewReview,
 }: ReviewResultsPanelProps) {
-  const [selectedIssue, setSelectedIssue] = useState<ReviewIssue | null>(null);
-  const [currentPage, setCurrentPage] = useState<number>(1);
+  // The quote to show highlighted in the content document
+  const [quoteTarget, setQuoteTarget] = useState<QuoteTarget | null>(null);
   const [activePreviewIdx, setActivePreviewIdx] = useState<number>(0);
   // null until the user picks a tab, so the default can follow the results without
   // overriding a choice they have already made
@@ -691,6 +718,13 @@ export function ReviewResultsPanel({
     [issues],
   );
 
+  // Switch to the content document and highlight a quote on its page
+  const showQuote = (page: number, quote: string) => {
+    setQuoteTarget({ page, quote, nonce: Date.now() });
+    const contentIdx = previewTabs.findIndex((t) => t.kind === "content");
+    if (contentIdx >= 0) setActivePreviewIdx(contentIdx);
+  };
+
   const handleDownload = () => {
     const blob = new Blob([JSON.stringify(issues, null, 2)], {
       type: "application/json",
@@ -726,11 +760,7 @@ export function ReviewResultsPanel({
                     unmappedColumns={activeTab?.unmappedColumns}
                   />
                 ) : activeDocUrl ? (
-                  <iframe
-                    src={activeDocUrl}
-                    className="w-full h-full"
-                    title="PDF Document"
-                  />
+                  <PdfPane url={activeDocUrl} />
                 ) : (
                   <div className="flex items-center justify-center h-full">
                     <p className="text-gray-400">No document loaded</p>
@@ -1180,14 +1210,9 @@ export function ReviewResultsPanel({
                   unmappedColumns={activeTab?.unmappedColumns}
                 />
               ) : activeDocUrl ? (
-                <iframe
-                  src={
-                    isContentActive
-                      ? `${activeDocUrl}#page=${currentPage}`
-                      : activeDocUrl
-                  }
-                  className="w-full h-full"
-                  title="PDF Document"
+                <PdfPane
+                  url={activeDocUrl}
+                  target={isContentActive ? quoteTarget : null}
                 />
               ) : (
                 <div className="flex items-center justify-center h-full">
@@ -1255,7 +1280,10 @@ export function ReviewResultsPanel({
             )}
             <div className="h-[800px] overflow-y-auto p-4">
               {activeResultsTab === "claims" && claimsReport ? (
-                <ClaimsMatchingTab claimsReport={claimsReport} />
+                <ClaimsMatchingTab
+                  claimsReport={claimsReport}
+                  onSelectClaim={(claim) => showQuote(claim.page, claim.text)}
+                />
               ) : issues.length === 0 ? (
                 <p className="text-sm text-gray-400 italic text-center py-10">
                   No issues were detected in this document.
@@ -1268,14 +1296,7 @@ export function ReviewResultsPanel({
                       className={`border-l-4 p-3 rounded-lg ${getSeverityColor(
                         issue.score,
                       )} cursor-pointer hover:shadow-lg transition-all`}
-                      onClick={() => {
-                        setCurrentPage(issue.page);
-                        const contentIdx = previewTabs.findIndex(
-                          (t) => t.kind === "content",
-                        );
-                        if (contentIdx >= 0) setActivePreviewIdx(contentIdx);
-                        setSelectedIssue(issue);
-                      }}
+                      onClick={() => showQuote(issue.page, issue.quote)}
                     >
                       <div className="flex justify-between items-start mb-2">
                         <span className="text-xs font-bold bg-gray-800 text-white px-2 py-0.5 rounded-full">
@@ -1331,109 +1352,6 @@ export function ReviewResultsPanel({
           </div>
         </div>
       </div>
-
-      {/* Issue Detail Modal */}
-      {selectedIssue && (
-        <div
-          className="fixed inset-0 bg-white bg-opacity-80 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-          onClick={() => setSelectedIssue(null)}
-        >
-          <div
-            className={`bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto border-l-8 ${getSeverityColor(
-              selectedIssue.score,
-            )}`}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="sticky top-0 bg-gradient-to-r from-gray-50 to-gray-100 px-8 py-6 border-b border-gray-200 flex justify-between items-start">
-              <div className="flex-1">
-                <div className="flex items-center gap-3 mb-3">
-                  <span className="text-sm font-bold bg-gray-800 text-white px-3 py-1 rounded-full">
-                    Page {selectedIssue.page}
-                  </span>
-                  <span
-                    className={`text-sm font-bold ${getSeverityBadge(
-                      selectedIssue.score,
-                    )} text-white px-3 py-1 rounded-full`}
-                  >
-                    Severity: {selectedIssue.score}/100
-                  </span>
-                  {isClaimMatchStatus(selectedIssue.claim_match) && (
-                    <ClaimMatchBadge
-                      status={selectedIssue.claim_match}
-                      claimId={selectedIssue.claim_id}
-                      precision={selectedIssue.claim_precision}
-                    />
-                  )}
-                </div>
-                <h3 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-                  <span className="text-3xl">⚠️</span>
-                  {selectedIssue.type}
-                </h3>
-              </div>
-              <button
-                onClick={() => setSelectedIssue(null)}
-                className="text-gray-400 hover:text-gray-600 transition-colors p-2"
-              >
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-            <div className="px-8 py-6 space-y-6">
-              <div>
-                <h4 className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-2">
-                  Quoted Text
-                </h4>
-                <div className="bg-gray-50 rounded-lg p-4 border-l-4 border-gray-300">
-                  <p className="text-lg text-gray-800 italic">
-                    &ldquo;{selectedIssue.quote}&rdquo;
-                  </p>
-                </div>
-              </div>
-              <div>
-                <h4 className="text-sm font-bold text-red-600 uppercase tracking-wide mb-2">
-                  Issue Description
-                </h4>
-                <p className="text-base text-gray-700 leading-relaxed">
-                  {selectedIssue.issue}
-                </p>
-              </div>
-              <div>
-                <h4 className="text-sm font-bold text-green-600 uppercase tracking-wide mb-2">
-                  Recommended Fix
-                </h4>
-                <p className="text-base text-gray-700 leading-relaxed">
-                  {selectedIssue.fix}
-                </p>
-              </div>
-              <div className="pt-4 border-t border-gray-200 space-y-3">
-                <div>
-                  <h4 className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-1">
-                    Reference
-                  </h4>
-                  <p className="text-sm text-gray-600">
-                    {selectedIssue.reference}
-                  </p>
-                </div>
-                <div>
-                  <h4 className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-1">
-                    Source Document
-                  </h4>
-                  <p className="text-sm text-gray-600">
-                    {selectedIssue.source}
-                  </p>
-                </div>
-              </div>
-            </div>
-            <div className="sticky bottom-0 bg-gray-50 px-8 py-4 border-t border-gray-200 flex justify-end">
-              <button
-                onClick={() => setSelectedIssue(null)}
-                className="bg-gray-600 hover:bg-gray-700 text-white font-semibold py-2 px-6 rounded-lg transition-colors"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

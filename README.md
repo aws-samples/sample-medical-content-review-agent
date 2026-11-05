@@ -12,6 +12,7 @@ Medical Content Review is an AI-powered multi-agent system for reviewing medical
 - **External data sources**: Cross-check claims against PubMed, OpenFDA, ClinicalTrials.gov, and Nova web search — each toggleable from the UI
 - **Live progress dashboard**: Elapsed timer, event-driven phase checklist, and per-tool activity log with expandable raw output while the review runs
 - **Preview tabs**: Switch between the uploaded content PDF, its reference PDFs, and the parsed claims library — before, during, and after the review
+- **PDF viewer with quote highlighting**: Every PDF is shown in a pdf.js viewer with zoom, fit-width and a hand tool. Clicking a finding or a claim finds its quote in the page's text layer (tolerant of footnote markers, ligatures and transcription slips), highlights it, and zooms to it
 - **Detailed issue report**: Each issue includes the quoted text, severity score, recommended fix, source reference, and its claim-match tag, sorted by page
 
 ## 🚀 Deployment
@@ -54,7 +55,7 @@ See the [deployment guide](docs/DEPLOYMENT.md) for detailed instructions.
      - **External Evidence** — cross-checks claims against enabled public databases (skipped when every external source is off)
    - Aggregates every reviewer's findings, merges a quote flagged on several pages into one finding, and asks an editor model which findings to merge and drop. Code applies those decisions under hard rules (claims-library and mandatory findings are never dropped, merged findings must be the same kind of check on the same page) and writes the final report
    - Records every step, its timing, and any failure it survived in `reviews/{session_id}/run_record.json`, with a verdict on whether the review completed
-6. Review detected issues in the results panel; expand **Pre-Approved Claims Matching** to see every claim and its tag; click an issue to jump to its page; download the report as JSON
+6. Review detected issues in the results panel; expand **Pre-Approved Claims Matching** to see every claim and its tag; click an issue or a claim to see its quote highlighted in the PDF, zoomed so small print is readable; download the report as JSON
 
 ### Pre-approved claims
 

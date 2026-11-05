@@ -20,6 +20,12 @@ export default defineConfig({
     sourcemap: true,
     rollupOptions: {
       output: {
+        // Static hosts that have no MIME type for .mjs and send nosniff would refuse
+        // the pdf.js worker as a script; ship it as .js instead
+        assetFileNames: (asset) =>
+          asset.names?.some((name) => name.endsWith(".mjs"))
+            ? "assets/[name]-[hash].js"
+            : "assets/[name]-[hash][extname]",
         manualChunks(id) {
           if (
             id.includes("node_modules/react-dom") ||
