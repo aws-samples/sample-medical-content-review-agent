@@ -60,7 +60,7 @@ LIGATURES = str.maketrans(
 )
 
 
-class TruncatedTranscription(RuntimeError):
+class TruncatedTranscription(RuntimeError):  # noqa: N818
     """The model hit the output limit; retrying the same request cannot help."""
 
 
@@ -482,8 +482,8 @@ def process_pdf(
         note_issue(
             session_id,
             "ocr",
-            f"pages {[p for p in failed if p not in unreadable]} were read from the text"
-            " layer only",
+            f"pages {[p for p in failed if p not in unreadable]} were read from the"
+            " text layer only",
             severity="warning",
             document=stem,
         )

@@ -44,10 +44,11 @@ def get_reviews(session_id: str) -> str:
 
     Reads every file under `s3://{STAGING_BUCKET}/reviews/{session_id}/`, tags each
     finding with the reviewer that produced it (`"generic" | "external" | "internal"
-    | "claims"`), sorts findings by page number, merges same-kind repeats of a quote into
-    one finding listing every page, gives each finding an id (`F1`, ...), and writes
-    the result to `s3://{STAGING_BUCKET}/reviews/{session_id}/all_findings.json`, which
-    the editor reads and `publish_review` publishes from.
+    | "claims"`), sorts findings by page number, merges same-kind repeats of a quote
+    into one finding listing every page, gives each finding an id (`F1`, ...), and
+    writes the result to
+    `s3://{STAGING_BUCKET}/reviews/{session_id}/all_findings.json`, which the editor
+    reads and `publish_review` publishes from.
 
     Parameters
     ----------

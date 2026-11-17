@@ -374,7 +374,7 @@ def publish_review(
     )
     report = [
         _published_form(f, group)
-        for f, group in zip(published, quote_groups(published))
+        for f, group in zip(published, quote_groups(published), strict=False)
     ]
 
     report_key = prefix + REPORT_NAME

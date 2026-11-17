@@ -390,7 +390,7 @@ async def _review(inputs: ReviewInputs, steps: _Steps) -> None:
     matching = [asyncio.create_task(claims(uri)) for uri in batch_uris]
     reviewing = [
         asyncio.create_task(reviews(uri, task))
-        for uri, task in zip(batch_uris, matching)
+        for uri, task in zip(batch_uris, matching, strict=False)
     ]
     try:
         if library_uri:

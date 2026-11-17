@@ -167,7 +167,8 @@ def _findings_summary(findings: list[dict]) -> str:
         return ""
     mandatory = sum(1 for f in findings if f.get("type") == "mandatory")
     checks = sorted({CHECK_LABELS.get(f.get("check", ""), "Other") for f in findings})
-    return f"{mandatory} mandatory, {len(findings) - mandatory} optional: {', '.join(checks)}"
+    optional = len(findings) - mandatory
+    return f"{mandatory} mandatory, {optional} optional: {', '.join(checks)}"
 
 
 def claim_rows(claims: list[dict], findings: list[dict]) -> list[list[object]]:
@@ -186,7 +187,7 @@ def claim_rows(claims: list[dict], findings: list[dict]) -> list[list[object]]:
         The claims sheet rows, without the header
     """
     rows = []
-    for claim, about in zip(claims, link_findings(claims, findings)):
+    for claim, about in zip(claims, link_findings(claims, findings), strict=False):
         outcome, recommendation = claim_outcome(claim)
         usable = claim.get("library_claim_usable")
         rows.append(

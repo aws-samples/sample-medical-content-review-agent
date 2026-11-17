@@ -135,7 +135,8 @@ def normalise(text: object) -> str:
         Lower-cased text with punctuation and repeated whitespace collapsed, and
         shorthand spelled out. `%` and decimal points survive, because "1.8%" and "18%"
         are different claims, but a sentence-ending period does not: it is formatting,
-        not content. So do the signs in :data:`NUMBER_PREFIXES` and a `+` after a number.
+        not content. So do the signs in :data:`NUMBER_PREFIXES` and a `+` after a
+        number.
         Footnote markup and layout tags are dropped first.
     """
     lowered = NUMBER_SUFFIX_RE.sub(r"\1+ ", strip_markup(text).lower())
@@ -307,7 +308,8 @@ MAX_NUMERIC_SPAN = 3
 def aligned(text: str, approved: str) -> SequenceMatcher:
     """Align the content's words with the closest line of the approved wording
 
-    A bundled entry is compared line by line, so its other lines do not count as dropped.
+    A bundled entry is compared line by line, so its other lines do not count as
+    dropped.
 
     Parameters
     ----------
