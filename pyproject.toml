@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Medical Content Review - AI-powered multi-source medical content review"
 readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [
     { name = "AWS Professional Services", email = "aws-professional-services@amazon.com" },
 ]
@@ -88,4 +88,6 @@ python_functions = ["test_*"]
 [dependency-groups]
 dev = [
     "pre-commit>=4.5.1",
+    # transitive dep of pre-commit via virtualenv, floor set for the GHSA-cwqr-hh33-gh44 family
+    "filelock>=4.2.1",
 ]
