@@ -542,8 +542,8 @@ const CLAIM_FACETS: Facet<ClaimMatch>[] = [
       c.library_claim_usable === true
         ? ["usable"]
         : c.library_claim_usable === false
-          ? [c.audience_approved === false ? "audience" : "unusable"]
-          : null,
+        ? [c.audience_approved === false ? "audience" : "unusable"]
+        : null,
     valueLabels: {
       usable: "Usable",
       unusable: "Not usable",
@@ -687,7 +687,9 @@ function ClaimsMatchingTab({
               aria-pressed={isSelected}
               title={
                 count.status
-                  ? `Show only ${CLAIM_MATCH_LABELS[count.status].toLowerCase()}es`
+                  ? `Show only ${CLAIM_MATCH_LABELS[
+                      count.status
+                    ].toLowerCase()}es`
                   : "Show every claim"
               }
               onClick={() =>
@@ -1221,7 +1223,9 @@ export function ReviewResultsPanel({
       saveBlob(await response.blob(), `${downloadStem}readiness_report.xlsx`);
     } catch (e) {
       setXlsxError(
-        `Could not download the Excel report (${e instanceof Error ? e.message : String(e)}). The link is valid for an hour after the review.`,
+        `Could not download the Excel report (${
+          e instanceof Error ? e.message : String(e)
+        }). The link is valid for an hour after the review.`,
       );
     }
   };
@@ -1603,9 +1607,13 @@ export function ReviewResultsPanel({
               <p className="text-gray-600 mt-1">
                 {stats.total === 0
                   ? "No mandatory issues to fix in your document"
-                  : `${stats.total} mandatory ${stats.total === 1 ? "issue" : "issues"} to fix in your document`}
+                  : `${stats.total} mandatory ${
+                      stats.total === 1 ? "issue" : "issues"
+                    } to fix in your document`}
                 {stats.optional > 0
-                  ? ` · ${stats.optional} optional ${stats.optional === 1 ? "note" : "notes"}`
+                  ? ` · ${stats.optional} optional ${
+                      stats.optional === 1 ? "note" : "notes"
+                    }`
                   : ""}
                 {claimsReport
                   ? ` · ${claimsReport.total_claims} claims matched against the library`
@@ -1867,7 +1875,9 @@ export function ReviewResultsPanel({
                         { value: "open", label: `Open ${openIssues.length}` },
                         {
                           value: "addressed",
-                          label: `Addressed ${keyedIssues.length - openIssues.length}`,
+                          label: `Addressed ${
+                            keyedIssues.length - openIssues.length
+                          }`,
                         },
                       ]}
                     />
@@ -1900,7 +1910,11 @@ export function ReviewResultsPanel({
                       const isSelected = selectedKey === card.key;
                       const open = () => {
                         setSelectedKey(card.key);
-                        showQuote(first.page, first.quote, cardSpans(card.items));
+                        showQuote(
+                          first.page,
+                          first.quote,
+                          cardSpans(card.items),
+                        );
                       };
                       return (
                         <div

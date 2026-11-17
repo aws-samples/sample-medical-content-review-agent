@@ -42,8 +42,8 @@ const issues: ReviewIssue[] = [
   {
     ...base,
     page: 2,
-    quote: "Excelent safety",
-    headline: "Misspelled 'Excelent'",
+    quote: "Excellent safety",
+    headline: "Misspelled 'Excellent'",
     type: "optional",
     score: 20,
     check: "editorial",
@@ -53,7 +53,11 @@ const issues: ReviewIssue[] = [
 
 function renderPanel() {
   return render(
-    <ReviewResultsPanel issues={issues} isLoading={false} onNewReview={() => {}} />,
+    <ReviewResultsPanel
+      issues={issues}
+      isLoading={false}
+      onNewReview={() => {}}
+    />,
   );
 }
 
@@ -62,7 +66,7 @@ describe("result cards", () => {
     renderPanel();
     expect(screen.getByText("Superlative: 'Best'")).toBeTruthy();
     expect(screen.getByText("Unsupported claim")).toBeTruthy();
-    expect(screen.queryByText("Misspelled 'Excelent'")).toBeNull();
+    expect(screen.queryByText("Misspelled 'Excellent'")).toBeNull();
     expect(screen.getAllByText("Mark addressed")).toHaveLength(1);
     // the word at issue is marked in the quote
     expect(screen.getByText("Best", { selector: "mark" })).toBeTruthy();
@@ -84,11 +88,11 @@ describe("result cards", () => {
     renderPanel();
     fireEvent.click(screen.getByRole("button", { name: /Filters/ }));
     fireEvent.click(screen.getByRole("button", { name: /^Optional/ }));
-    expect(screen.getByText("Misspelled 'Excelent'")).toBeTruthy();
+    expect(screen.getByText("Misspelled 'Excellent'")).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Search findings"), {
-      target: { value: "excelent" },
+      target: { value: "excellent" },
     });
     expect(screen.queryByText("Superlative: 'Best'")).toBeNull();
-    expect(screen.getByText("Misspelled 'Excelent'")).toBeTruthy();
+    expect(screen.getByText("Misspelled 'Excellent'")).toBeTruthy();
   });
 });
