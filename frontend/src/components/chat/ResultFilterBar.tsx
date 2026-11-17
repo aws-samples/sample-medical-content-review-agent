@@ -66,7 +66,9 @@ export function ResultFilterBar<T>({
           <SlidersHorizontal className="w-3.5 h-3.5" />
           Filters{activeChips > 0 ? ` · ${activeChips}` : ""}
           <ChevronDown
-            className={`w-3.5 h-3.5 transition-transform ${open ? "rotate-180" : ""}`}
+            className={`w-3.5 h-3.5 transition-transform ${
+              open ? "rotate-180" : ""
+            }`}
           />
         </button>
         <span className="text-[11px] text-gray-500 whitespace-nowrap">
@@ -103,8 +105,8 @@ export function ResultFilterBar<T>({
                     option.selected
                       ? "bg-indigo-600 text-white border-indigo-600"
                       : option.count === 0
-                        ? "bg-white text-gray-400 border-gray-200"
-                        : "bg-white text-gray-700 border-gray-300 hover:border-indigo-400"
+                      ? "bg-white text-gray-400 border-gray-200"
+                      : "bg-white text-gray-700 border-gray-300 hover:border-indigo-400"
                   }`}
                 >
                   {option.label}{" "}

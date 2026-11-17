@@ -618,8 +618,8 @@ def _build_match_records(
         ):
             # the deviation's fix would put another audience's wording into this asset
             deviation = (
-                f"closest to {matched_id}, but {_audience_reason(library_claim, audience)}:"
-                f" {deviation}"
+                f"closest to {matched_id}, but "
+                f"{_audience_reason(library_claim, audience)}: {deviation}"
             )
             status, nearest_id, library_claim = "none", matched_id, None
         if not library_claim:
@@ -934,7 +934,8 @@ def match_claims(
             note_issue(
                 session_id,
                 "match",
-                "the matcher's reply had no parsable verdicts, so its claims count as no match",
+                "the matcher's reply had no parsable verdicts, so its claims count as"
+                " no match",
                 batch=stem,
                 claims=len(unresolved),
             )
@@ -945,7 +946,8 @@ def match_claims(
             note_issue(
                 session_id,
                 "match",
-                f"the matcher gave no verdict for {len(skipped)} claims, so they count as no match",
+                f"the matcher gave no verdict for {len(skipped)} claims, so they count"
+                " as no match",
                 severity="warning",
                 batch=stem,
                 claims=skipped,

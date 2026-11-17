@@ -6,7 +6,8 @@ import hashlib
 import math
 import os
 import re
-import subprocess
+import shutil
+import subprocess  # nosec B404 - runs poppler with fixed argument lists, no shell
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -32,6 +33,10 @@ from utils.s3 import (
 from tools.run_record import note_issue
 
 bedrock_client = boto3.client("bedrock-runtime", config=get_bedrock_config())
+
+# resolved once so poppler runs by absolute path rather than via a PATH lookup
+PDFTOTEXT = shutil.which("pdftotext") or "pdftotext"
+PDFINFO = shutil.which("pdfinfo") or "pdfinfo"
 
 MAX_PAGES = 200
 UNREADABLE = "[Unreadable page:"
@@ -60,7 +65,7 @@ LIGATURES = str.maketrans(
 )
 
 
-class TruncatedTranscription(RuntimeError):
+class TruncatedTranscription(RuntimeError):  # noqa: N818
     """The model hit the output limit; retrying the same request cannot help."""
 
 
@@ -149,9 +154,9 @@ def _text_layer(pdf_path: str, page_idx: int) -> str:
     str
         The page's text layer with ligatures expanded, or "" when it has none
     """
-    result = subprocess.run(
+    result = subprocess.run(  # nosec B603 - fixed argv, pdf_path is our own temp file
         [
-            "pdftotext",
+            PDFTOTEXT,
             "-q",
             "-enc",
             "UTF-8",
@@ -192,8 +197,8 @@ def _render_dpi(pdf_path: str, page_idx: int, dpi: int) -> float:
         The requested DPI, or a lower one that keeps the page within
         :data:`MAX_IMAGE_EDGE` px wide
     """
-    out = subprocess.run(
-        ["pdfinfo", "-f", str(page_idx), "-l", str(page_idx), pdf_path],
+    out = subprocess.run(  # nosec B603 - fixed argv, pdf_path is our own temp file
+        [PDFINFO, "-f", str(page_idx), "-l", str(page_idx), pdf_path],
         capture_output=True,
         text=True,
         check=False,
@@ -482,8 +487,8 @@ def process_pdf(
         note_issue(
             session_id,
             "ocr",
-            f"pages {[p for p in failed if p not in unreadable]} were read from the text"
-            " layer only",
+            f"pages {[p for p in failed if p not in unreadable]} were read from the"
+            " text layer only",
             severity="warning",
             document=stem,
         )

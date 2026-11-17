@@ -13,7 +13,7 @@ authority on wording:
 - Footnote and reference markers are glued to the word or number before them in the text
   layer ("Week 248" can be "Week 24" followed by marker 8). Use the images to tell a marker
   from the content's own numbers.
-- Some PDFs have a damaged text layer: letters missing from a font ("hel ful" for
+- Some PDFs have a damaged text layer: letters missing from a font ("hel full" for
   "helpful", "Pla ebo" for "Placebo") or a first letter set in another font ("erious" for
   "Serious"). Where the text layer is garbled like this, take the word from the images
   instead.

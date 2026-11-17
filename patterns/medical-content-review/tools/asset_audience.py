@@ -98,7 +98,7 @@ def approved_for(library_claim: dict, asset_audience: str) -> bool:
 
 
 def write_asset_audience(session_dir: str, audience: str, reason: str) -> None:
-    """Store the asset's audience ("hcp", "patient" or "" when undecided) for the session
+    """Store the session asset's audience ("hcp", "patient" or "" if undecided)
 
     Parameters
     ----------

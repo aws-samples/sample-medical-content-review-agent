@@ -140,7 +140,8 @@ def run_docker_container(memory_id: str, stack_name: str, region: str) -> str | 
         "--rm",
         "-d",
         "-p",
-        "8080:8080",
+        # loopback only: the agent trusts X-Local-User-Id and runs with your AWS credentials
+        "127.0.0.1:8080:8080",
         "--platform",
         "linux/arm64",
         *env_args,

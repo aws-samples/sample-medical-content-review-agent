@@ -183,7 +183,7 @@ docker build -f patterns/medical-content-review/Dockerfile \
   --platform linux/arm64 .
 
 # Run with explicit env vars
-docker run --rm -it -p 8080:8080 \
+docker run --rm -it -p 127.0.0.1:8080:8080 \
   --platform linux/arm64 \
   -e MEMORY_ID=<your-memory-id> \
   -e STACK_NAME=<your-stack-name> \
@@ -215,7 +215,7 @@ curl http://localhost:8080/ping
 
 ```bash
 # Start container in foreground (not detached)
-docker run --rm -p 8080:8080 \
+docker run --rm -p 127.0.0.1:8080:8080 \
   --platform linux/arm64 \
   -e MEMORY_ID=<memory-id> \
   -e STACK_NAME=<stack-name> \
