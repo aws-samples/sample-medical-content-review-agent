@@ -9,8 +9,10 @@ services:
       dockerfile: patterns/medical-content-review/Dockerfile
       platforms:
         - linux/arm64
+    # loopback only: this agent trusts X-Local-User-Id and holds your AWS credentials,
+    # so it must not be reachable from other machines on the network
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       - MEMORY_ID=${MEMORY_ID}
       - STACK_NAME=${STACK_NAME}
@@ -42,7 +44,7 @@ services:
       context: ../frontend
       dockerfile: ../docker/Dockerfile.frontend.dev
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - ../frontend:/app
       - /app/node_modules
