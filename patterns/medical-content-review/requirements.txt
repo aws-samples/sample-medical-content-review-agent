@@ -2,6 +2,6 @@
 strands-agents==1.30.0
 mcp==1.28.1
 bedrock-agentcore[strands-agents]==1.18.1
-PyJWT[crypto]>=2.13.0
+PyJWT[crypto]>=2.15.1
 pdf2image>=1.17.0
 openpyxl>=3.1.5
